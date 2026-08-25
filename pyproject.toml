@@ -7,8 +7,21 @@ requires-python = ">=3.10"
 dependencies = [
   "inspect-ai==0.3.260",
   "trusted-router-py>=0.7.0",
+  "openai>=1.0",          # required by Inspect's OpenAI-compatible provider (pulls httpx2)
   "pyyaml>=6",
 ]
+
+# Registers trustedrouter/<model> as an Inspect provider on install, so the CLI can
+# resolve it. run.py also imports tr.provider directly, which covers the uninstalled case.
+[project.entry-points.inspect_ai]
+trustedrouter = "tr.provider"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["tr"]
 
 [tool.openevalz]
 eval = "scicode"

@@ -4,3 +4,5 @@ __pycache__/
 logs/
 *.eval
 .env
+routing.jsonl
+bundle.json

@@ -9,7 +9,8 @@ from __future__ import annotations
 import argparse, json, os, sys, datetime
 from pathlib import Path
 
-from tr.provider import model_string, require_delegated_key
+import tr.provider  # noqa: F401 — registers the trustedrouter Inspect provider
+from tr.provider import ROUTING_LOG_ENV
 
 TASK = "inspect_evals/scicode"
 HERE = Path(__file__).parent
@@ -48,6 +49,20 @@ def emit_bundle(log, args, out: Path) -> dict:
         tpl["dataset"]["revision"] = getattr(log.eval.dataset, "revision", None)
     except Exception:
         pass
+    # What ACTUALLY served each call, captured by the trustedrouter provider.
+    # Inspect's own log does not carry this: "we asked for X" and "X answered" are
+    # different claims and the bundle records the second.
+    routing = []
+    rl = HERE / "routing.jsonl"
+    if rl.exists():
+        routing = [json.loads(line) for line in rl.read_text().splitlines() if line.strip()]
+    tpl["routing"] = routing
+    served = sorted({r["selected_model"] for r in routing if r.get("selected_model")})
+    tpl["model"]["served_models"] = served
+    if len(served) > 1:
+        tpl["model"]["fallback_occurred"] = True
+    tpl["cost_microdollars"] = sum(r.get("cost_microdollars") or 0 for r in routing)
+    tpl["generation_ids"] = [r["generation_id"] for r in routing if r.get("generation_id")]
     tpl["outputs"]["eval_log"] = str(args.log_dir)
     tpl["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     out.write_text(json.dumps(tpl, indent=2))
@@ -67,7 +82,14 @@ def main() -> int:
     args = ap.parse_args()
 
     _reject_globs(args.sample_id)
-    require_delegated_key()
+    if not os.environ.get("TRUSTEDROUTER_API_KEY"):
+        raise SystemExit(
+            "TRUSTEDROUTER_API_KEY is not set. Complete the Sign in with TrustedRouter "
+            "flow to mint a user-scoped delegated key."
+        )
+    routing_log = HERE / "routing.jsonl"
+    routing_log.unlink(missing_ok=True)
+    os.environ[ROUTING_LOG_ENV] = str(routing_log)
 
     from inspect_ai import eval as inspect_eval
 
@@ -78,7 +100,7 @@ def main() -> int:
     # limit_microdollars, enforced server-side by TrustedRouter.
     logs = inspect_eval(
         TASK,
-        model=model_string(args.model),
+        model=f"trustedrouter/{args.model}",
         sample_id=args.sample_id,
         token_limit=args.token_limit,
         log_dir=args.log_dir,
@@ -97,7 +119,9 @@ def main() -> int:
         "status": log.status,
         "samples": n,
         "sample_id": args.sample_id,
-        "model": args.model,
+        "requested_model": args.model,
+        "served_models": bundle["model"]["served_models"],
+        "cost_microdollars": bundle["cost_microdollars"],
         "bundle": "bundle.json",
     }, indent=2))
     return 0 if log.status == "success" else 1
