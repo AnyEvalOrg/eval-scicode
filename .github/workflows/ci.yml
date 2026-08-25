@@ -33,6 +33,17 @@ jobs:
           else:
               raise SystemExit("should have refused")
           PY
+      - name: run.py compiles and refuses globs
+        run: |
+          python -m py_compile run.py
+          python - <<'PY'
+          import ast, sys
+          src = open("run.py").read()
+          assert "_reject_globs" in src, "glob guard missing"
+          assert "cost-limit is NOT used" in src or "cost_limit" not in src, "must not use cost-limit"
+          ast.parse(src)
+          print("run.py ok")
+          PY
       - name: Redaction policy covers the answer fields
         run: |
           python - <<'PY'
