@@ -44,6 +44,17 @@ class TrustedRouterAPI(OpenAICompatibleAPI):
     ) -> None:
         from inspect_ai.model import GenerateConfig
 
+        # strict_tools defaults to True in Inspect, which ADDS `strict: true` to every
+        # tool definition. OpenAI then requires that `required` list every key in
+        # `properties`, and rejects the request otherwise. Many evals ship tool schemas
+        # that do not satisfy that — BFCL, the function-calling benchmark, fails with
+        # `invalid_function_parameters` on its very first sample.
+        #
+        # Default it off. Strict mode is an addition Inspect makes, not something the
+        # eval asked for, and silently reshaping an eval's tool schemas changes what a
+        # function-calling benchmark measures. Callers can opt back in per run.
+        model_args.setdefault("strict_tools", False)
+
         super().__init__(
             model_name=model_name,
             base_url=base_url,
