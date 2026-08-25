@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - name: Install
-        run: pip install "inspect-ai==0.3.260" "trusted-router>=0.7.0" pyyaml
+        run: pip install "inspect-ai==0.3.260" "trusted-router-py>=0.7.0" pyyaml
       - name: Manifest and bundle are valid JSON/YAML
         run: |
           python -c "import json;json.load(open('openevalz.yaml'.replace('.yaml','.json'))) if False else None"
