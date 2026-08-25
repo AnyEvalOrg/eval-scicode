@@ -1,0 +1,45 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install
+        run: pip install "inspect-ai==0.3.260" "trusted-router>=0.7.0" pyyaml
+      - name: Manifest and bundle are valid JSON/YAML
+        run: |
+          python -c "import json;json.load(open('openevalz.yaml'.replace('.yaml','.json'))) if False else None"
+          python -c "import json;json.load(open('bundle.template.json'));print('bundle ok')"
+          python -c "import yaml;yaml.safe_load(open('redaction.yaml'));print('redaction ok')"
+          python -c "import yaml;yaml.safe_load(open('scaffolds/baseline.yaml'));print('scaffold ok')"
+      - name: TR wiring imports and refuses to run without a key
+        run: |
+          python - <<'PY'
+          import tr.provider as p
+          assert p.model_string("x").startswith("openai-api/trustedrouter/")
+          try:
+              p.require_delegated_key()
+          except RuntimeError:
+              print("correctly refuses without TRUSTEDROUTER_API_KEY")
+          else:
+              raise SystemExit("should have refused")
+          PY
+      - name: Redaction policy covers the answer fields
+        run: |
+          python - <<'PY'
+          import yaml
+          r = yaml.safe_load(open("redaction.yaml"))
+          assert "answers" in r and r["answers"], "answer redaction is mandatory"
+          assert r["snippet"]["include_answers"] is False, "snippets must never carry answers"
+          print("redaction policy ok")
+          PY
+

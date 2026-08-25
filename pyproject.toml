@@ -1,0 +1,16 @@
+[project]
+name = "openevalz-eval-scicode"
+version = "0.1.0"
+description = "OpenEvalz packaging of SciCode: A Research Coding Benchmark Curated by Scientists"
+license = { text = "BUSL-1.1" }
+requires-python = ">=3.10"
+dependencies = [
+  "inspect-ai==0.3.260",
+  "trusted-router>=0.7.0",
+  "pyyaml>=6",
+]
+
+[tool.openevalz]
+eval = "scicode"
+execution_class = "sandbox-local"
+cost_class = "high"

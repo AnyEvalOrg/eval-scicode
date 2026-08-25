@@ -1,0 +1,16 @@
+# Baseline scaffold for eval-scicode
+# Scaffold is a first-class evaluation axis: the same model under a different
+# scaffold varies materially in cost and accuracy, so it is recorded in the
+# bundle, the receipt, and every aggregate facet.
+id: baseline
+version: 1
+description: >
+  The eval's own default solver as shipped upstream, unmodified. This is the
+  reference point every other scaffold is compared against.
+upstream_default: true
+budget:
+  max_turns: null      # null = the eval's own default
+  max_tokens: null
+notes: >
+  Comparisons are only valid within a scaffold. Any leaderboard, Pareto plot or
+  pass-rate that mixes scaffolds is meaningless.

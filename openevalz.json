@@ -1,0 +1,52 @@
+{
+  "openevalz_version": 1,
+  "eval": {
+    "id": "scicode",
+    "slug": "scicode",
+    "title": "SciCode: A Research Coding Benchmark Curated by Scientists",
+    "group": "Coding",
+    "tags": [],
+    "source": "core"
+  },
+  "upstream": {
+    "repo": "https://github.com/UKGovernmentBEIS/inspect_evals",
+    "path": "src/inspect_evals/scicode",
+    "inspect_ai": "0.3.260",
+    "eval_version": "2-A",
+    "dependency": "scicode"
+  },
+  "execution": {
+    "class": "sandbox-local",
+    "cost_class": "high",
+    "sandbox": [
+      "scorer"
+    ],
+    "requires_internet": false,
+    "fast": false,
+    "supports_k8s": false,
+    "environment": ""
+  },
+  "tasks": [
+    {
+      "name": "scicode",
+      "samples": 65
+    }
+  ],
+  "total_samples": 65,
+  "external_assets": [
+    {
+      "type": "direct_url",
+      "source": "https://raw.githubusercontent.com/scicode-bench/SciCode/{SHA}/eval/data/",
+      "state": "pinned"
+    },
+    {
+      "type": "direct_url",
+      "source": "https://drive.google.com/uc?id=17G_k65N_6yFFZ2O-jQH00Lh6iaw3z-AW",
+      "state": "pinned"
+    }
+  ],
+  "scaffolds": [
+    "baseline"
+  ],
+  "generated": "2026-08-25"
+}

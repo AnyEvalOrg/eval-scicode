@@ -1,0 +1,28 @@
+# Redaction policy for eval-scicode
+# Applied BEFORE anything is published. Getting this wrong once on a permanent
+# public URL is unrecoverable, so this file gates publication.
+version: 1
+eval: scicode
+
+# Never published, for any eval.
+global:
+  - credentials          # anything the agent discovered that looks like a secret
+  - pii
+  - injection_payloads   # prompt-injection content the agent ingested
+  - screenshots          # may embed anything on screen
+
+# Answer-bearing regions. These are what protect the benchmark AND make the
+# public page safe to index (see the SEO surface in the plan).
+answers:
+  - target
+  - reference_solution
+  - test_expectations
+
+eval_specific:
+  []
+
+# Snippet policy for the public permalink page.
+snippet:
+  problem_statement: first_400_chars
+  trace: first_and_last_turn
+  include_answers: false

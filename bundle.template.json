@@ -1,0 +1,59 @@
+{
+  "$schema": "https://openevalz.com/schema/bundle-v1.json",
+  "bundle_version": 1,
+  "eval": {
+    "id": "scicode",
+    "task": null,
+    "sample_id": null
+  },
+  "upstream": {
+    "repo": "https://github.com/UKGovernmentBEIS/inspect_evals",
+    "path": "src/inspect_evals/scicode",
+    "inspect_ai": "0.3.260"
+  },
+  "dataset": {
+    "source": null,
+    "revision": null
+  },
+  "model": {
+    "name": null,
+    "provider": null,
+    "wire_format": null,
+    "reasoning_effort": null
+  },
+  "scaffold": {
+    "id": "baseline",
+    "version": null
+  },
+  "monitors": {
+    "a": {
+      "model": null,
+      "prompt_version": null
+    },
+    "b": {
+      "model": null,
+      "prompt_version": null
+    }
+  },
+  "sandbox": {
+    "runtime": null,
+    "runsc_version": null,
+    "platform": null,
+    "images": [],
+    "egress_allowlist": [],
+    "egress_proxy_used": null
+  },
+  "node": {
+    "os_image": null,
+    "kernel": null,
+    "arch": "x86_64"
+  },
+  "scorer": {
+    "version": null
+  },
+  "receipts": [],
+  "outputs": {
+    "eval_log": null,
+    "json_export": null
+  }
+}
