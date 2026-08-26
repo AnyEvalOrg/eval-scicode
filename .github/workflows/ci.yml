@@ -14,36 +14,78 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - name: Install
-        run: pip install "inspect-ai==0.3.260" "trusted-router-py>=0.7.0" pyyaml
-      - name: Manifest and bundle are valid JSON/YAML
+        # `openai` is REQUIRED, not optional. inspect_ai's openai_compatible module
+        # imports httpx2 at module scope, and httpx2 only arrives as a transitive
+        # dependency of openai. Installing inspect-ai alone leaves tr/provider.py
+        # unimportable with ModuleNotFoundError: No module named 'httpx2', which is
+        # what turned CI red across every repo in this org.
         run: |
-          python -c "import json;json.load(open('openevalz.yaml'.replace('.yaml','.json'))) if False else None"
-          python -c "import json;json.load(open('bundle.template.json'));print('bundle ok')"
-          python -c "import yaml;yaml.safe_load(open('redaction.yaml'));print('redaction ok')"
-          python -c "import yaml;yaml.safe_load(open('scaffolds/baseline.yaml'));print('scaffold ok')"
-      - name: TR wiring imports and refuses to run without a key
+          pip install \
+            "inspect-ai==0.3.260" \
+            "openai==3.3.1" \
+            "httpx2" \
+            "trusted-router-py>=0.7.0" \
+            pyyaml
+
+      - name: Manifest, bundle, redaction and scaffold parse
         run: |
           python - <<'PY'
-          import tr.provider as p
-          assert p.model_string("x").startswith("openai-api/trustedrouter/")
-          try:
-              p.require_delegated_key()
-          except RuntimeError:
-              print("correctly refuses without TRUSTEDROUTER_API_KEY")
-          else:
-              raise SystemExit("should have refused")
+          import json, yaml
+          manifest = json.load(open("openevalz.json"))
+          # This check used to be `... if False else None` — it parsed nothing and
+          # passed unconditionally. Assert the fields the packaging actually promises.
+          for key in ("eval", "tasks", "scaffolds", "upstream", "openevalz_version"):
+              assert key in manifest, f"openevalz.json is missing {key!r}"
+          assert manifest["tasks"], "openevalz.json declares no tasks"
+          json.load(open("bundle.template.json"))
+          yaml.safe_load(open("redaction.yaml"))
+          yaml.safe_load(open("scaffolds/baseline.yaml"))
+          print("manifest, bundle, redaction and scaffold all parse")
           PY
+
+      - name: TrustedRouter provider registers with Inspect and records routing
+        # The previous version asserted model_string() and require_delegated_key(),
+        # neither of which survived the rewrite to a real @modelapi provider.
+        #
+        # NOTE: @modelapi REPLACES the decorated class with a loader function, so
+        # hasattr(TrustedRouterAPI, "on_response") is always False. Assert against an
+        # INSTANCE, and against the registry — not against the decorated name.
+        run: |
+          python - <<'PY'
+          import tr.provider as provider
+          from inspect_ai.model._providers.openai_compatible import OpenAICompatibleAPI
+          from inspect_ai.util import registry_info
+
+          info = registry_info(provider.TrustedRouterAPI)
+          assert "trustedrouter" in str(info.name), f"not registered: {info.name}"
+
+          api = provider.TrustedRouterAPI(
+              model_name="google/gemma-4-31b-it", api_key="sk-tr-v1-ci"
+          )
+          assert hasattr(api, "routing_records"), "provider must collect routing records"
+          assert type(api).on_response is not OpenAICompatibleAPI.on_response, (
+              "on_response must be overridden — it is what records WHICH model actually "
+              "served the request, which is the whole reason this provider exists"
+          )
+          print("trustedrouter provider registered and records routing")
+          PY
+
       - name: run.py compiles and refuses globs
         run: |
           python -m py_compile run.py
           python - <<'PY'
-          import ast, sys
+          import ast
           src = open("run.py").read()
+          # A glob in --sample-id silently selects MANY samples: fnmatch matching means
+          # a user who buys one problem could run hundreds. This guard is billing.
           assert "_reject_globs" in src, "glob guard missing"
+          # inspect_ai's --cost-limit never resolves for trustedrouter/<model>, so
+          # relying on it would be a cap that does nothing.
           assert "cost-limit is NOT used" in src or "cost_limit" not in src, "must not use cost-limit"
           ast.parse(src)
           print("run.py ok")
           PY
+
       - name: Redaction policy covers the answer fields
         run: |
           python - <<'PY'
@@ -53,4 +95,3 @@ jobs:
           assert r["snippet"]["include_answers"] is False, "snippets must never carry answers"
           print("redaction policy ok")
           PY
-
