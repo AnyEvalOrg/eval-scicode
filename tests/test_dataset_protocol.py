@@ -9,7 +9,7 @@ from inspect_ai.model import ChatMessageAssistant, ChatMessageUser
 from scicode.dataset import load_records, get_dataset, record_to_sample, manifest
 from scicode.solver import solve_scicode_problem, composed_code
 from scicode import prompt_templates as prompts
-from scicode.test_plan import split_test
+from scicode.execution import execution_request
 
 
 def upstream(name):
@@ -69,24 +69,15 @@ def test_sequential_messages_and_previous_code(background):
 
 
 @pytest.mark.parametrize('record',load_records(True),ids=lambda r:r['problem_id'])
-def test_every_test_plan_is_target_free_in_child(record):
+def test_every_upstream_test_is_transmitted_unchanged(record):
     for step in record['sub_steps']:
-        for test in step['test_cases']:
-            plan = split_test(test)
-            tree = ast.parse(plan['compute']+'\n'+ '\n'.join(plan['operands']))
-            assert not any(isinstance(n,ast.Name) and n.id == 'target' for n in ast.walk(tree))
-            assert plan['assertions']
+        request = execution_request('def candidate(): return 0', step,
+                                    dependencies=record['required_dependencies'])
+        assert request['tests'] is step['test_cases']
+        assert request['dependencies'] == record['required_dependencies']
+        assert request['bindings'] == {'candidate': 'call'}
 
 
 def test_supplied_inspect_keeps_original_known_bad_steps():
     steps = {s['step_number'] for r in load_records(True) for s in r['sub_steps']}
     assert {'13.6','62.1','76.3'} <= steps
-
-
-def test_wrapped_dev_reference_values_stay_in_root():
-    record=next(r for r in load_records(dev_only=True) if r['problem_id']=='78')
-    for step in record['sub_steps'][:2]:
-        for test in step['test_cases']:
-            plan=split_test(test)
-            assert 'expected_output' not in plan['compute']
-            assert 'expected_theta' not in plan['compute']

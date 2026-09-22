@@ -15,13 +15,21 @@ MAX_NODES = 100000
 def encode(value):
     if isinstance(value, (np.ndarray, np.generic)):
         array = np.asarray(value)
+        if array.nbytes >= MAX_BYTES:
+            raise ValueError('Result too large')
         if array.dtype.hasobject:
             raise ValueError('Object arrays are not supported')
         stream = io.BytesIO()
         np.save(stream, array, allow_pickle=False)
         return ['scalar' if isinstance(value, np.generic) else 'array', base64.b64encode(stream.getvalue()).decode('ascii')]
     if scipy.sparse.issparse(value):
-        return ['sparse', value.format, encode(value.toarray())]
+        if value.format == 'coo':
+            components = (value.data, value.row, value.col)
+        elif value.format in ('csr', 'csc', 'bsr'):
+            components = (value.data, value.indices, value.indptr)
+        else:
+            raise ValueError('Unsupported sparse format')
+        return ['sparse', value.format, list(value.shape), [encode(v) for v in components]]
     if isinstance(value, sympy.Symbol):
         return ['symbol', str(value)]
     if isinstance(value, sympy.Integer):
@@ -92,8 +100,39 @@ def decode(node, budget=None, depth=0):
             return {sub(k):sub(v) for k,v in node[1]}
         values = [sub(v) for v in node[1]]
         return tuple(values) if kind == 'tuple' else values
-    if kind == 'sparse' and len(node) == 3 and node[1] in ('csr','csc','coo','bsr'):
-        return getattr(scipy.sparse, node[1]+'_matrix')(sub(node[2]))
+    if kind == 'sparse' and len(node) == 4 and node[1] in ('csr','csc','coo','bsr'):
+        shape = node[2]
+        if (type(shape) is not list or len(shape) != 2
+                or any(type(v) is not int or not 0 <= v <= MAX_NODES for v in shape)
+                or type(node[3]) is not list or len(node[3]) != 3):
+            raise ValueError('Invalid sparse shape')
+        data, indices, indptr = [sub(v) for v in node[3]]
+        if (any(type(v) is not np.ndarray for v in (data, indices, indptr))
+                or indices.ndim != 1 or indptr.ndim != 1
+                or indices.dtype.kind not in 'iu' or indptr.dtype.kind not in 'iu'):
+            raise ValueError('Invalid sparse components')
+        fmt = node[1]
+        if fmt == 'coo':
+            if data.ndim != 1:
+                raise ValueError('Invalid sparse data')
+            return scipy.sparse.coo_matrix((data, (indices, indptr)), shape=shape)
+        block = (1, 1)
+        if fmt == 'bsr':
+            if data.ndim != 3 or not all(data.shape[1:]):
+                raise ValueError('Invalid sparse blocks')
+            block = data.shape[1:]
+        elif data.ndim != 1:
+            raise ValueError('Invalid sparse data')
+        major, minor = (shape[1], shape[0]) if fmt == 'csc' else shape
+        if (major % block[0] or minor % block[1]
+                or len(indptr) != major // block[0] + 1
+                or indptr[0] != 0 or indptr[-1] != len(indices)
+                or len(data) != len(indices) or np.any(indptr[1:] < indptr[:-1])
+                or np.any(indices < 0) or np.any(indices >= minor // block[1])):
+            raise ValueError('Invalid sparse indices')
+        result = getattr(scipy.sparse, fmt + '_matrix')((data, indices, indptr), shape=shape)
+        result.check_format(full_check=True)
+        return result
     raise ValueError('Invalid result')
 
 

@@ -62,29 +62,33 @@ Other deliberate changes from supplied Inspect:
 
 * The initial user input is the actual main-problem prompt instead of an opaque
   ID. Private record metadata and a candidate-readable HDF5 mount are removed.
-* A separate root worker decodes candidate operands and executes the upstream
-  assertions under address-space, CPU and wall-time limits.
-  Candidate computation cannot monkeypatch root comparisons or read targets.
-  Test ASTs are split from the pinned source, including target unpacking,
-  compound assertions, tolerances, and the dev `are_equivalent` helper. Nested
-  predicates, reductions, arithmetic, comprehensions and named predicates return
-  underlying numerical outputs; their boolean results are computed in the worker.
-  Six dev `test_case_N` wrappers are flattened. Constant input-derived references are
-  recomputed in the worker. No candidate Python is evaluated by root.
-* Comparisons preserve upstream `cmp_tuple_or_list`, `are_dicts_close`,
-  `are_csc_matrix_close` and NumPy allclose semantics, including argument order,
-  default `rtol=1e-5`, `atol=1e-8`, `equal_nan=False`, explicit test tolerances,
-  symbol-key handling and upstream exception behavior. The upstream comparison
-  and HDF5 reader modules are copied unchanged. The two hardcoded benchmark
-  comparison imports are removed during plan compilation, matching Inspect's
-  intended cleanup without mutating the packaged source.
-* Assertions happen after the child finishes, so computations are not stopped
-  at the first failed comparison. Every per-test result is signed. A runtime
-  failure prevents the step from passing; later subproblems still run after
-  successful cleanup. If the pod dies or cleanup cannot establish quiescence,
-  remaining steps are marked unrun/failed, so the denominator stays fixed.
+* A separate root worker runs each upstream test **unmodified**, including
+  helpers, reference calculations, wrappers, loops and assertions. Candidate
+  functions are proxies: arguments and results cross private pipes using the
+  bounded data-only format. The candidate code is executed once in its own
+  process, so candidate functions share a namespace and call each other there.
+  Candidate function arguments are transmitted as name-only references back
+  into that namespace. Root never evaluates candidate source or unpickles bytes.
+  NumPy's module-level PRNG and Python's `random` state are synchronized at
+  initialization and around calls using validated plain data. Test seeds,
+  interleaved draws, and cached Gaussian values therefore cross the process
+  boundary; independently created generator objects remain process-local.
+* Pinned dependency imports and upstream `test_util` helpers live in the trusted
+  executor. The original `scicode.compare.cmp` import path resolves to those
+  helpers. Tests retain their tolerances, argument order and NumPy semantics.
+  Only binding names are inventoried from candidate source; test ASTs are never
+  rewritten or split. Referenced module constants are fetched as safe data.
+  Candidate bindings that shadow builtins, trusted imports or preloaded
+  comparison helpers fail closed.
+* Tests run in their original order with a shared trusted namespace. Each
+  assertion executes before the next test begins. Failed calls cannot become
+  passing tests even if test code catches their exceptions. Every per-test
+  result is signed; a worker crash or timeout fails the entire step. Later
+  subproblems still run after successful cleanup. If the pod dies or cleanup
+  cannot establish quiescence, remaining steps are marked unrun/failed, so the
+  denominator stays fixed. A main problem passes only when all its steps pass.
 * Safe serialization admits plain types, NumPy scalars/arrays, common sparse
-  matrices and constrained symbolic scalar representations. Arbitrary Python
+  matrices (data/index components, without densification) and constrained symbolic scalar representations. Arbitrary Python
   objects and object-dtype arrays fail closed. Arrays use
   `np.save(allow_pickle=False)` inside bounded JSON/base64 envelopes. The worker
   checks dtype, shape and byte length before loading with `allow_pickle=False`.
@@ -115,19 +119,22 @@ access, descriptor accounting, RSS visibility, writable OOM adjustment, and
 writable/executable work mount. It also checks target ownership, mode and HDF5
 signature, subreaper support, and the comparison worker’s limits/imports before
 issuing a random 256-bit HMAC key. This task exposes no generation-time tools.
-RUNNER unlinks the root-only request, stages a protected driver, and launches only candidate computation as
-UID/GID **65532**, with supplementary groups cleared and `no_new_privs` set.
-The root process is nondumpable; all child descriptors are closed before exec.
-Target values are loaded by the comparison worker only after the child and
-descendants have stopped. The worker has hard **768 MiB RLIMIT_AS**, **8 seconds
-RLIMIT_CPU**, and a supervisor-enforced **10-second wall deadline** for all tests
-in a step. It starts via exec with no signing key and closes inherited
-descriptors except its redirected standard streams. All candidate result file reads, JSON/NumPy/SymPy decoding and
-numerical comparisons happen there. The supervisor consumes only fixed verdict
-bytes authored by the worker. Worker crashes, timeouts, MemoryError and late
-prerequisite failures yield a **signed INCORRECT**, preserving time to sign
-within the outer deadline. These budgets also apply to target loading and can
-affect unusually expensive comparisons.
+RUNNER unlinks the root-only request and launches candidate code as UID/GID
+**65532**, with supplementary groups cleared and `no_new_privs` set. A separate
+root executor starts with `python -I -S`, cwd `/`, and only checked root-owned,
+non-writable runtime/site-package directories. It has no signing key, candidate
+code, or candidate output descriptors. Its only extra descriptors are the two
+RPC pipe endpoints; the candidate cannot access the executor's verdict stream.
+Targets are opened by that executor after exec.
+
+The executor has hard **768 MiB RLIMIT_AS**, **300 seconds RLIMIT_CPU**,
+**64 RLIMIT_NOFILE**, no core dumps, and a supervisor-enforced wall deadline
+covering the whole step (300 seconds by default). A seccomp filter denies socket
+and network syscalls in addition to container/pod network isolation. JSON,
+NumPy/SymPy decoding and all test predicates happen in that limited worker.
+The signing supervisor consumes only fixed verdict bytes authored by the worker.
+Executor crashes, timeouts, MemoryError and late prerequisite failures yield a
+**signed INCORRECT**, preserving time to sign within the outer deadline.
 
 The inherited template bounds NPROC at 64, NOFILE at 256, AS/DATA at 1 GiB,
 CORE at zero, and file size at the output limit. A 50 ms watchdog bounds
@@ -136,8 +143,12 @@ aggregate candidate RSS at 768 MiB. A 100 ms disk watchdog bounds `/tmp`,
 entries, deduplicated by inode. Root has SYS_PTRACE for cross-UID descriptor
 accounting; the irreversible child credential drop clears capabilities.
 Sampling cannot enumerate all kernel memory allocations; pod attribution is
-the backstop. Output reads occur after UID sweeps, are nonblocking, bounded,
-no-follow, and reject symlinks, hardlinks, nonregular files and wrong ownership.
+the backstop. Pipe replies have bounded length-prefixed frames and a 32 MiB
+aggregate receive budget per trusted test (and separately for initialization
+and binding setup). Only the trusted test loop resets that budget; the step's
+wall/CPU deadlines remain unchanged. A rejected frame permanently invalidates
+the channel. Malformed, oversized and unsupported results fail
+closed; result files are no longer used.
 Receipts contain only statuses, per-test booleans and a working-directory ID.
 No code, candidate streams, targets or answer bytes enter explanations/logs.
 
@@ -229,12 +240,60 @@ Linux supervisor path is used by the canonical check.
 PYTHONPATH=. python -m pytest -q
 ```
 
-Tests cover all packaged IDs and target-free samples/plans, byte-equal upstream
+Tests cover all packaged IDs and unchanged test source, byte-equal upstream
 prompts, comparisons against retained upstream helpers, safe serialization,
 actual signing/comparison code with authored fixtures, receipt forgery,
 watchdogs, SETUP prerequisites, missing-receipt/kernel attribution, generation
-traceback privacy, nested numerical predicates, bounded comparison-worker
-failures, private publication, and real Helm rendering. Helm must be on PATH.
+traceback privacy, test-helper forgery, chained NumPy predicates, loop-built
+values, bounded executor failures, private publication, and real Helm rendering.
+All 50 dev steps are enumerated for local reference checks; when the HDF5 asset
+is absent, steps needing it are explicitly skipped. The operator canonical check requires
+all 50 steps and uses the same proxy executor. Helm must be on PATH.
+
+With the read-only `scicode/test_data.h5` symlink available, the 2026-09-22 host
+dev check reports **48 passed, 2 failed, 0 skipped**:
+
+```sh
+PYTHONPATH=.:.build/test-deps python -m pytest -q tests/test_proxy_execution.py -k local_dev_ground_truth
+```
+
+The proxy repairs address general transport and execution behavior:
+
+* **6.1 / 7.1:** the host harness originally put targets in argv (6.1:
+  `E2BIG`, about 28 MB) and encoded the entire target set as one frame (7.1:
+  above 32 MiB). Fixture targets now load from individual temporary files.
+  After those harness repairs, trusted-executor tracing showed `Reply budget
+  exceeded` in 6.1 case 4 and 7.1 case 3 (with subsequent calls also failing).
+  Each large reply was 13,653,744 bytes; even the two-call final cases fit
+  within 32 MiB, but accumulated replies from earlier tests did not. The
+  per-test budget fixes both steps without removing frame or traffic limits.
+* **47.4:** all three assertions failed because `np.random.seed(1024)` ran
+  only in the trusted test process. Synchronizing random state in both
+  directions preserves the Monte Carlo stream across calls and later tests.
+  Argument mutation is not the cause of these assertions: each case builds
+  fresh positions and compares the returned energy trace.
+
+The following are **host-only validation failures pending an image recheck**,
+not exclusions, skips, or expected failures. Both reproduce with ground-truth
+code and unchanged tests in one plain Python process using
+`process_hdf5_to_tuple`, so neither is specific to the proxy:
+
+| Step | Failing cases | Host diagnosis |
+| --- | --- | --- |
+| 78.3 | 1–3 | The timing-weighted error metric selects `dt=0.001`, returning shapes `(10001, 2)`, `(20001, 2)`, `(15001, 2)`. Targets have shapes `(2, 2)`, `(3, 2)`, `(2, 2)` and match trajectories at `dt=10`. `np.allclose` raises a broadcasting `ValueError`. |
+| 70.8 | 4 (1–3 pass) | `AssertionError`; maximum probability error about `1.7914e-4`. At `L=1.611792e22`, computed phases are of order `1e10`. A relative Hamiltonian perturbation of `1e-15` changes a probability by about `1.2502e-4`, demonstrating sensitivity to floating-point rounding. |
+
+This host uses Python 3.12.3, NumPy 2.5.2 and SciPy 1.17.1; the image pins
+NumPy 1.26.4 and SciPy 1.13.1. Neither failing step calls SciPy. The 78.3
+selection depends on measured execution time as well as numerical error;
+70.8 is numerically sensitive. These observations do **not** confirm a
+specific version regression or that the pinned image will pass. NumPy documents
+[scalar promotion changes in 2.0](https://numpy.org/doc/2.0/numpy_2_0_migration_guide.html),
+but no such dtype change was established as the cause here; the 78.3 shape
+error follows ordinary [broadcasting rules](https://numpy.org/doc/2.0/reference/generated/numpy.allclose.html).
+Downloading the pinned packages for a host comparison failed because DNS was
+unavailable. Recheck both steps through the image-backed canonical command
+above, retaining the full 50-step denominator and original assertions.
 
 ## Historical published baselines and licensing
 

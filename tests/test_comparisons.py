@@ -1,4 +1,3 @@
-import ast
 import base64
 import io
 import json
@@ -8,7 +7,6 @@ import sympy
 import pytest
 from scicode import test_util as current
 from scicode.safe_serialization import dumps, loads
-from scicode.test_plan import split_test, compare_plan
 from test_dataset_protocol import upstream
 
 original = upstream('comparison')
@@ -72,34 +70,6 @@ def test_reject_pickle_array_and_oversized_declared_shape():
         loads(b'["pickle", "malicious"]')
 
 
-@pytest.mark.parametrize('source,target,passed',[
-    ('x = np.array([1.,2.])\nassert np.allclose(x,target,rtol=0,atol=1e-6)',np.array([1.,2.0000005]),True),
-    ('x = np.array([1.,2.])\nassert np.allclose(x,target,rtol=0,atol=1e-6)',np.array([1.,2.000002]),False),
-    ('x = np.array([1.,2.])\na,b=target\nassert np.allclose(x,a) and b == True',(np.array([1.,2.]),True),True),
-    ('x = (True, False)\nassert x == target',(True,False),True),
-    ('x = np.array([True])\nassert x.any() == target.any()',np.array([False]),False),
-])
-def test_split_matches_upstream_assertions(source,target,passed):
-    env={'np':np,'target':target}
-    try:
-        exec(source,env); expected=True
-    except AssertionError: expected=False
-    plan=split_test(source); child={'np':np};exec(plan['compute'],child)
-    values=[eval(v,child) for v in plan['operands']]
-    assert compare_plan(plan,loads(dumps(values)),target) == expected == passed
-
-
-def test_root_comparator_is_not_candidate_monkeypatch():
-    plan=split_test('x = candidate()\nassert np.allclose(x, target)')
-    assert compare_plan(plan,[np.array([9.])],np.array([1.])) is False
-
-
-def test_dev_literal_reference_recomputed_by_supervisor():
-    plan=split_test('expected = np.array([1.0])\nactual = candidate()\nassert np.allclose(actual, expected)')
-    assert plan['operands'] == ['actual']
-    assert not compare_plan(plan,[np.array([9.])],None)
-
-
 @pytest.mark.parametrize('value',[sympy.Integer(3),sympy.Rational(1,3),sympy.Float('1.234567890123')])
 def test_symbolic_numbers_preserve_upstream_comparison_behavior(value):
     decoded=loads(dumps(value))
@@ -112,47 +82,22 @@ def test_object_arrays_are_never_coerced_to_passing_numeric_results():
         dumps(np.array([sympy.Integer(1)],dtype=object))
 
 
-@pytest.mark.parametrize('source,bad,good', [
-    ('assert (np.abs(np.mean(actual - 100) / 100) < .1) == target', [np.array([900.])], [np.array([105.])]),
-    ('assert (np.mean(actual) == 0) == target', [np.array([1.])], [np.array([0.])]),
-    ('assert ((np.abs(actual) < .1).all(), np.isclose(other, 2)) == target',
-     [np.array([9.]), 2.], [np.array([.01]), 2.]),
-])
-def test_nested_predicates_compare_raw_numerical_outputs(source, bad, good):
-    plan = split_test(source)
-    target = (True, True) if 'other' in source else True
-    assert not compare_plan(plan, bad, target)
-    assert compare_plan(plan, good, target)
-    # A child monkeypatch which returns the target boolean for the predicate
-    # cannot stand in for an incorrect raw result (the first two old plans did).
-    if 'other' not in source:
-        assert plan['operands'] == ['actual']
-        assert not compare_plan(plan, [True], target)
 
 
-@pytest.mark.parametrize('step_id', ['77.12', '60.5', '64.6', '35.3', '80.7'])
-def test_packaged_nested_predicates_cannot_be_replaced_with_expected_boolean(step_id):
-    from scicode.dataset import load_records
-    step = next(s for r in load_records(True) for s in r['sub_steps'] if s['step_number'] == step_id)
-    for source in step['test_cases']:
-        plan = split_test(source)
-        assert not compare_plan(plan, [True], True)
-        assert all(not any(isinstance(n, (ast.Compare, ast.BoolOp))
-                           for n in ast.walk(ast.parse(op)))
-                   for op in plan['operands'])
-        assert any(name in plan['operands'] for name in ('T_sim', 'mu_ext_list', 'Num_particle_Trace', 'A', 'instant_T_array'))
+@pytest.mark.parametrize('fmt', ['csr', 'csc', 'coo', 'bsr'])
+def test_sparse_wire_preserves_components_without_densifying(fmt, monkeypatch):
+    value = getattr(sparse, fmt + '_matrix')(np.array([[1., 0., 3.], [0., 4., 0.]]))
+    expected = value.toarray()
+    monkeypatch.setattr(type(value), 'toarray', lambda *a, **k: (_ for _ in ()).throw(AssertionError('No densification')))
+    decoded = loads(dumps(value))
+    assert type(decoded) is type(value)
+    assert np.array_equal(decoded.tocoo().data, value.tocoo().data)
+    assert decoded.shape == expected.shape
 
 
-def test_named_predicates_use_underlying_results():
-    plan = split_test('actual = candidate()\npassed = np.isclose(actual, 100)\nassert passed == target')
-    assert plan['operands'] == ['actual']
-    assert not compare_plan(plan, [True], True)
-    assert not compare_plan(plan, [900.], True)
-    assert compare_plan(plan, [100.], True)
-
-
-def test_generator_predicate_stays_in_trusted_comparison():
-    plan = split_test('actual = candidate()\nassert all(x > 10 for x in actual) == target')
-    assert plan['operands'] == ['actual']
-    assert compare_plan(plan, [[11, 12]], True)
-    assert not compare_plan(plan, [[1, 2]], True)
+@pytest.mark.parametrize('indices,indptr', [([9], [0, 1]), ([0], [0, 9]), ([0], [1, 1]), ([-1], [0, 1])])
+def test_sparse_wire_rejects_invalid_indices(indices, indptr):
+    from scicode.safe_serialization import encode
+    raw = ['sparse', 'csr', [1, 2], [encode(np.array([1.])), encode(np.array(indices)), encode(np.array(indptr))]]
+    with pytest.raises(ValueError):
+        loads(json.dumps(raw).encode())

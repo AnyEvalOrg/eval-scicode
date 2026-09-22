@@ -97,7 +97,7 @@ def setup_probe(tmp_path):
     def run(argv, **kwargs):
         if argv[-1] == '--probe':
             step('comparison_probe')
-            assert kwargs['check'] and kwargs['timeout'] == 3
+            assert kwargs['check'] and kwargs['timeout'] == 5
             assert kwargs['close_fds']
             assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == -3
             return
@@ -177,7 +177,8 @@ def test_comparison_worker_prerequisites_enforce_hard_limits_before_work(monkeyp
     worker.prerequisites()
     assert events == [
         (worker.resource.RLIMIT_AS, (768 * 1024**2, 768 * 1024**2)),
-        (worker.resource.RLIMIT_CPU, (8, 8)),
+        (worker.resource.RLIMIT_CPU, (300, 300)),
+        (worker.resource.RLIMIT_NOFILE, (64, 64)),
         (worker.resource.RLIMIT_CORE, (0, 0)),
     ]
 
@@ -188,3 +189,27 @@ def test_subreaper_is_checked_before_setup_issues_key(setup_probe):
     with pytest.raises(SystemExit):
         execute_setup(namespace)
     namespace['secrets'].token_hex.assert_not_called()
+
+
+def test_executor_rejects_writable_or_nonroot_import_roots(monkeypatch):
+    import scicode.comparison_worker as worker
+    monkeypatch.setattr(worker.sysconfig, 'get_path', lambda *a: '/protected/site-packages')
+    for uid, mode in [(65532, 0o755), (0, 0o777)]:
+        monkeypatch.setattr(worker.os, 'stat', lambda *a, **k: SimpleNamespace(st_mode=0o040000 | mode, st_uid=uid))
+        with pytest.raises(RuntimeError, match='Unprotected'):
+            worker.trusted_paths()
+
+
+def test_executor_network_filter_fails_closed(monkeypatch):
+    import scicode.comparison_worker as worker
+    libc = SimpleNamespace(prctl=lambda *a: 0)
+    seccomp = SimpleNamespace(seccomp_init=Mock(return_value=1),
+                             seccomp_syscall_resolve_name=Mock(return_value=42),
+                             seccomp_rule_add=Mock(return_value=0),
+                             seccomp_load=Mock(return_value=-1), seccomp_release=Mock())
+    monkeypatch.setattr(worker.ctypes, 'CDLL', lambda name: libc if name is None else seccomp)
+    with pytest.raises(RuntimeError, match='Cannot restrict network'):
+        worker.deny_network()
+    seccomp.seccomp_release.assert_called_once_with(1)
+    denied = {c.args[0].decode() for c in seccomp.seccomp_syscall_resolve_name.call_args_list}
+    assert {'socket', 'connect', 'sendmsg', 'recvmsg', 'io_uring_setup'} <= denied

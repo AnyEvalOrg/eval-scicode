@@ -153,9 +153,9 @@ try:
     check_test_data()
     # Exercise the real worker limits and imports before candidate activity.
     subprocess.run(
-        [sys.executable, "-I", "/opt/scicode/runtime/comparison_worker.py", "--probe"],
+        [sys.executable, "-I", "-S", "/opt/scicode/runtime/comparison_worker.py", "--probe"],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        close_fds=True, check=True, timeout=3,
+        close_fds=True, check=True, timeout=5, cwd="/",
         env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
     )
     key = secrets.token_hex(32)
@@ -434,99 +434,91 @@ def sweep_uid():
         time.sleep(0.02)
 
 
-def run_step(argv, timeout, candidate_work):
-    if not isinstance(argv, list) or not argv or any(not isinstance(x, str) for x in argv):
-        raise ValueError("argv must be a nonempty string list")
-    java_step = os.path.basename(argv[0]) in {"java", "javac"}
-    child_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": candidate_work,
-                 "TMPDIR": candidate_work, "JAVA_TOOL_OPTIONS": "-XX:-UsePerfData",
-                 "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MPLCONFIGDIR": candidate_work}
-    with tempfile.TemporaryFile(dir=work) as stdout, tempfile.TemporaryFile(dir=work) as stderr:
-        child = subprocess.Popen(
-            argv, cwd=candidate_work,
-            env=child_env,
-            stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True,
-            start_new_session=True, preexec_fn=lambda: restrict_child(1024 if java_step else 256),
-        )
-        status = dict(returncode=125, timeout=False, overflow=False, memory_exceeded=False, disk_exceeded=False,
-                      cleanup_failed=False, supervisor_error=False)
-        output = b""
-        stopped = threading.Event()
-        watchdogs = [threading.Thread(target=watcher, args=(child.pid, stopped, status), daemon=True)
-                     for watcher in (watch_memory, watch_disk)]
+def run_proxy_tests(candidate_work):
+    # These files are root-authored. The candidate never receives test source,
+    # dependencies for trusted execution, bindings, targets or verdict handles.
+    candidate_request = os.path.join(work, "candidate.json")
+    executor_request = os.path.join(work, "executor.json")
+    with open(candidate_request, "x", encoding="utf-8") as stream:
+        json.dump({"code": request["code"], "timeout": request["timeout"]}, stream)
+    os.chmod(candidate_request, 0o444)
+    with open(executor_request, "x", encoding="utf-8") as stream:
+        json.dump({k: v for k, v in request.items() if k != "code"}, stream)
+    os.chmod(executor_request, 0o600)
+    call_read, call_write = os.pipe()
+    reply_read, reply_write = os.pipe()
+    child = executor = None
+    stopped = threading.Event()
+    watchdogs = []
+    verdicts = [False] * len(request["tests"])
+    status = dict(returncode=125, timeout=False, overflow=False, memory_exceeded=False, disk_exceeded=False,
+                  cleanup_failed=False, supervisor_error=False)
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": candidate_work,
+           "TMPDIR": candidate_work, "MPLCONFIGDIR": candidate_work,
+           "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
+    deadline = time.monotonic() + request["timeout"]
+    with tempfile.TemporaryFile(dir=work) as output, tempfile.TemporaryFile(dir=work) as errors, \
+            tempfile.TemporaryFile(dir=work) as results:
         try:
-            # Start after Popen: preexec_fn must not fork a threaded supervisor.
-            for watchdog in watchdogs:
-                watchdog.start()
-            status["returncode"] = child.wait(timeout=timeout)
+            # Neither process inherits the signing key across exec, nor the
+            # other's output descriptors. Targets are opened only after exec.
+            child = subprocess.Popen(
+                [sys.executable, "-I", "/opt/scicode/runtime/candidate_worker.py",
+                 candidate_request, str(call_read), str(reply_write)],
+                cwd=candidate_work, env=env, stdin=subprocess.DEVNULL,
+                stdout=output, stderr=errors, close_fds=True,
+                pass_fds=(call_read, reply_write), start_new_session=True, preexec_fn=restrict_child)
+            executor = subprocess.Popen(
+                [sys.executable, "-I", "-S", "/opt/scicode/runtime/comparison_worker.py",
+                 executor_request, str(reply_read), str(call_write)],
+                cwd="/", env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+                stdin=subprocess.DEVNULL, stdout=results, stderr=subprocess.DEVNULL,
+                close_fds=True, pass_fds=(reply_read, call_write), start_new_session=True)
+            for fd in (call_read, call_write, reply_read, reply_write):
+                os.close(fd)
+            call_read = call_write = reply_read = reply_write = None
+            # Start threads only after BOTH preexec/exec launches.
+            watchdogs = [threading.Thread(target=watcher, args=(child.pid, stopped, status), daemon=True)
+                         for watcher in (watch_memory, watch_disk)]
+            for watcher in watchdogs:
+                watcher.start()
+            result = executor.wait(timeout=max(0.01, deadline - time.monotonic()))
+            status["returncode"] = result
+            if result == 0:
+                results.seek(0)
+                bits = results.read(len(verdicts) + 1)
+                if len(bits) == len(verdicts) and all(bit in (0, 1) for bit in bits):
+                    verdicts = [bool(bit) for bit in bits]
         except subprocess.TimeoutExpired:
             status["timeout"] = True
         except Exception:
             status["supervisor_error"] = True
         finally:
-            # Cancel filesystem work immediately, before cleanup. Never wait for
-            # a complete scan: even a blocked syscall cannot delay signing.
             stopped.set()
-            for watchdog in watchdogs:
-                try:
-                    watchdog.join(timeout=0.2)
-                    if watchdog.is_alive():
-                        status["supervisor_error"] = True
-                except Exception:
+            for watcher in watchdogs:
+                watcher.join(timeout=0.2)
+                if watcher.is_alive():
                     status["supervisor_error"] = True
-            # Each post-exit operation is isolated: none may suppress signing.
-            try:
-                kill_group(child.pid)
-            except Exception:
-                status["cleanup_failed"] = True
-            try:
-                status["returncode"] = child.wait(timeout=1)
-            except Exception:
-                status["cleanup_failed"] = True
+            for fd in (call_read, call_write, reply_read, reply_write):
+                if fd is not None:
+                    os.close(fd)
+            for process in (executor, child):
+                if process is not None:
+                    try:
+                        kill_group(process.pid)
+                        process.wait(timeout=1)
+                    except Exception:
+                        status["cleanup_failed"] = True
             try:
                 sweep_uid()
             except Exception:
                 status["cleanup_failed"] = True
-        try:
-            stdout.seek(0)
-            output = stdout.read(limit + 1)
-            status["overflow"] = len(output) >= limit or os.fstat(stderr.fileno()).st_size >= limit
-        except Exception:
-            status["supervisor_error"] = True
-        return status, output
-
-
-def run_comparisons(plans, candidate_work):
-    comparison_request = os.path.join(work, "comparison.json")
-    with open(comparison_request, "x", encoding="utf-8") as stream:
-        json.dump({"plans": plans, "step_id": request["step_id"],
-                   "output_limit": limit, "candidate_uid": CANDIDATE_UID}, stream)
-    os.chmod(comparison_request, 0o600)
-    # exec keeps the HMAC key out of the worker; no candidate output is parsed
-    # or compared by this supervisor. stdout contains only worker-authored bits.
-    with tempfile.TemporaryFile(dir=work) as results:
-        child = subprocess.Popen(
-            [sys.executable, "-I", "/opt/scicode/runtime/comparison_worker.py",
-             comparison_request, candidate_work],
-            cwd="/", stdin=subprocess.DEVNULL, stdout=results,
-            stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True,
-            env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
-        )
-        try:
-            if child.wait(timeout=10) != 0:
-                return [False] * len(plans)
-            results.seek(0)
-            bits = results.read(len(plans) + 2)
-            if len(bits) != len(plans) + 1 or any(bit not in (0, 1) for bit in bits):
-                return [False] * len(plans)
-            status["overflow"] = bool(bits[0])
-            return [bool(bit) for bit in bits[1:]]
-        except subprocess.TimeoutExpired:
-            return [False] * len(plans)
-        finally:
-            if child.poll() is None:
-                child.kill()
-            child.wait(timeout=1)
+            status["overflow"] = (os.fstat(output.fileno()).st_size >= limit
+                                  or os.fstat(errors.fileno()).st_size >= limit)
+    if status["returncode"] != 0 or any(status[flag] for flag in
+            ("timeout", "overflow", "memory_exceeded", "disk_exceeded", "cleanup_failed", "supervisor_error")):
+        verdicts = [False] * len(verdicts)
+    return status, verdicts
 
 
 status = dict(returncode=125, timeout=False, overflow=False, memory_exceeded=False, disk_exceeded=False,
@@ -538,38 +530,15 @@ try:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
         raise RuntimeError("subreaper required")
-    # Imports resolve only from the root-owned image, never a candidate directory.
-    sys.path.insert(0, "/opt/scicode/runtime")
-    from test_plan import split_test
-    plans = [split_test(test) for test in request["tests"]]
-    # No target file/descriptors have been opened when the child is forked.
     candidate_work = os.path.join(work, "candidate")
     os.mkdir(candidate_work, 0o700)
     os.chown(candidate_work, CANDIDATE_UID, CANDIDATE_GID)
     os.chmod(work, 0o711)
-    # All test computations share a namespace and RNG, as upstream does.
-    # Root-only launch script is readable but not writable by the candidate.
-    driver = os.path.join(work, "driver.py")
-    with open(driver, "x", encoding="utf-8") as stream:
-        stream.write("import sys\n" +
-                     "sys.path.insert(0, '/opt/scicode/runtime')\n" +
-                     "from safe_serialization import dumps as _wire_dumps\n" +
-                     "_namespace = {}\n" +
-                     "exec(" + repr(request["code"]) + ", _namespace)\n")
-        for index, plan in enumerate(plans):
-            stream.write("exec(" + repr(plan["compute"]) + ", _namespace)\n")
-            stream.write("_values = [eval(e, _namespace) for e in " + repr(plan["operands"]) + "]\n")
-            stream.write("with open(" + repr("result-" + str(index)) + ", 'xb') as _out: _out.write(_wire_dumps(_values))\n")
-    os.chmod(driver, 0o444)
-    status, output = run_step(["/usr/local/bin/python3", "-I", driver], request["timeout"], candidate_work)
-    if status["returncode"] == 0 and not any(status[flag] for flag in
-            ("timeout", "overflow", "memory_exceeded", "disk_exceeded", "cleanup_failed", "supervisor_error")):
-        # Descendants are dead before root reads any candidate file or target.
-        verdicts = run_comparisons(plans, candidate_work)
+    status, verdicts = run_proxy_tests(candidate_work)
 except Exception:
     status["supervisor_error"] = True
 finally:
-    # No stdout, code, operands, target bytes or exception strings in receipts.
+    # No stdout, code, call results, target bytes or exception strings in receipts.
     body = json.dumps({**status, "verdicts": verdicts, "cwd": work}, separators=(",", ":"))
     tag = hmac.new(key, body.encode(), hashlib.sha256).hexdigest()
     sys.stdout.write(json.dumps({"body": body, "tag": tag}))

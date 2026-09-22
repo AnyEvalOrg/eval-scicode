@@ -128,7 +128,7 @@ def verify(timeout=300):
                 results.append({'step':step['step_number'], 'passed':False, 'reason':'not run after sandbox termination'})
                 continue
             code = composed_code(record, state.messages, step)
-            payload = execution_request(code, step, timeout)
+            payload = execution_request(code, step, timeout, record['required_dependencies'])
             result = await run_payload(sandbox(), payload)
             results.append({'step':step['step_number'], 'passed':result.passed, 'reason':result.reason})
             halted = result.terminal

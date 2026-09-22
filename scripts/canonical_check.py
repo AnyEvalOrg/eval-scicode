@@ -13,11 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0'
 
 
-def check_step(code, step, timeout):
+def check_step(code, step, timeout, dependencies=''):
+    bindings = runpy.run_path(str(ROOT/'scicode/bindings.py'))['candidate_bindings']
     runner = runpy.run_path(str(ROOT/'scicode/sandbox_runner.py'))
     receipts = runpy.run_path(str(ROOT/'scicode/receipts.py'))
-    request = {'code':code,'step_id':step['step_number'],'tests':step['test_cases'],
-               'timeout':timeout,'output_limit':32*1024*1024}
+    request = {'code': code, 'step_id': step['step_number'], 'tests': step['test_cases'],
+               'bindings': bindings(code, step['test_cases']), 'dependencies': dependencies,
+               'timeout': timeout, 'output_limit': 32*1024*1024}
     setup = subprocess.run([sys.executable,'-I','-c',runner['SETUP']], input=json.dumps(request),
                            capture_output=True,text=True,timeout=10)
     if setup.returncode:
@@ -61,7 +63,7 @@ def main():
             codes = [record['required_dependencies'], 'from test_util import are_dicts_close, cmp_tuple_or_list']
             for step in record['sub_steps']:
                 codes.append(step['ground_truth_code'])
-                result = check_step('\n'.join(codes), step, args.timeout)
+                result = check_step('\n'.join(codes), step, args.timeout, record['required_dependencies'])
                 results.append(result)
                 print(json.dumps(result),flush=True)
         report = {'image':args.image,'dataset_revision':manifest['revision'],'results':results,
