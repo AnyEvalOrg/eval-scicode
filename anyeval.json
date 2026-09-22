@@ -1,0 +1,55 @@
+{
+  "anyeval_version": 1,
+  "eval": {
+    "id": "scicode",
+    "slug": "scicode",
+    "title": "SciCode: Scientific Research Coding",
+    "group": "Coding",
+    "tags": [
+      "coding",
+      "science",
+      "sandbox",
+      "pass@1"
+    ],
+    "source": "upstream"
+  },
+  "upstream": {
+    "repo": "https://github.com/scicode-bench/SciCode",
+    "path": "eval/data",
+    "commit": "69a8cfc829fe8788a426ce8b5de6292366dce7ef",
+    "inspect_ai": "0.3.260",
+    "eval_version": "1.0.0",
+    "dependency": ""
+  },
+  "execution": {
+    "class": "sandbox-k8s",
+    "cost_class": "high",
+    "sandbox": "k8s",
+    "requires_internet": false,
+    "fast": false,
+    "supports_k8s": true,
+    "environment": "scicode/values.yaml"
+  },
+  "tasks": [
+    {
+      "name": "scicode",
+      "samples": 65
+    }
+  ],
+  "total_samples": 65,
+  "external_assets": [
+    {
+      "type": "container",
+      "source": "us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0"
+    },
+    {
+      "type": "container",
+      "source": "coredns/coredns:1.8.3",
+      "condition": "Explicit anyeval_chart=false exception only; absent from default chart"
+    }
+  ],
+  "scaffolds": [
+    "baseline"
+  ],
+  "generated": "2026-09-22"
+}

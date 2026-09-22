@@ -1,0 +1,4 @@
+include LICENSE NOTICE.md README.md UPSTREAM-README.md anyeval.json redaction.yaml bundle.template.json
+recursive-include scaffolds *.yaml
+recursive-include scicode *.py *.yaml Dockerfile *.txt *.gz *.json
+recursive-include scripts *.py *.yaml

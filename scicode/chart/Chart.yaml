@@ -1,0 +1,4 @@
+apiVersion: v2
+name: scicode-sandbox
+version: 1.0.0
+description: AnyEval SciCode sandbox with standard NetworkPolicy and no sidecars

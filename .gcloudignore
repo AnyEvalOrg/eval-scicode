@@ -1,0 +1,9 @@
+.git
+.build
+.pytest_cache
+**/__pycache__
+*.egg-info
+build
+dist
+# Do not include .gitignore: scicode/test_data.h5 is required for image builds.
+**/test_data.download

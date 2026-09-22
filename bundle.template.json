@@ -1,59 +1,43 @@
 {
-  "$schema": "https://openevalz.com/schema/bundle-v1.json",
+  "$schema": "https://anyeval.com/schema/bundle/1",
   "bundle_version": 1,
+  "generated_at": null,
   "eval": {
     "id": "scicode",
     "task": null,
     "sample_id": null
   },
   "upstream": {
-    "repo": "https://github.com/UKGovernmentBEIS/inspect_evals",
-    "path": "src/inspect_evals/scicode",
+    "repo": "https://github.com/scicode-bench/SciCode",
     "inspect_ai": "0.3.260"
   },
   "dataset": {
-    "source": null,
-    "revision": null
+    "source": "scicode-bench/SciCode",
+    "revision": "69a8cfc829fe8788a426ce8b5de6292366dce7ef"
   },
   "model": {
     "name": null,
     "provider": null,
-    "wire_format": null,
-    "reasoning_effort": null
+    "served": []
   },
   "scaffold": {
     "id": "baseline",
-    "version": null
-  },
-  "monitors": {
-    "a": {
-      "model": null,
-      "prompt_version": null
-    },
-    "b": {
-      "model": null,
-      "prompt_version": null
-    }
+    "version": 1,
+    "token_limit": null
   },
   "sandbox": {
-    "runtime": null,
-    "runsc_version": null,
-    "platform": null,
-    "images": [],
-    "egress_allowlist": [],
-    "egress_proxy_used": null
-  },
-  "node": {
-    "os_image": null,
-    "kernel": null,
-    "arch": "x86_64"
+    "class": null,
+    "provenance": null
   },
   "scorer": {
-    "version": null
+    "name": "verify",
+    "metric": "main-problem pass@1"
   },
   "receipts": [],
+  "routing": [],
   "outputs": {
-    "eval_log": null,
-    "json_export": null
+    "status": null,
+    "score": null,
+    "explanation": null
   }
 }

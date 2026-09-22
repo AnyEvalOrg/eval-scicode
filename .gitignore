@@ -1,8 +1,9 @@
+.build/
 __pycache__/
 *.pyc
-.venv/
-logs/
-*.eval
-.env
-routing.jsonl
-bundle.json
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+**/test_data.h5
+**/test_data.download
