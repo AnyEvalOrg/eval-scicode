@@ -62,16 +62,22 @@ Other deliberate changes from supplied Inspect:
 
 * The initial user input is the actual main-problem prompt instead of an opaque
   ID. Private record metadata and a candidate-readable HDF5 mount are removed.
-* A separate root worker runs each upstream test **unmodified**, including
+* A separate root worker runs each upstream test, including
   helpers, reference calculations, wrappers, loops and assertions. Candidate
   functions are proxies: arguments and results cross private pipes using the
   bounded data-only format. The candidate code is executed once in its own
   process, so candidate functions share a namespace and call each other there.
   Candidate functions and classes are callable proxies. Instances, callables,
   iterators and other non-data results remain in a candidate-side table of at
-  most 4,096 opaque handles. Attribute access, calls, indexing, iteration and
-  numeric operations are forwarded; root receives only validated data and
-  handle IDs, never executable objects or native array pointers.
+  most 4,096 opaque handles. Only explicit attribute reads and method/function
+  calls in trusted tests are forwarded. Handle equality and hashing use local
+  identity; truth is false. Array/numeric conversions and other value operators
+  fail locally. Library attribute probes cannot trigger RPC. Root receives only
+  validated data and handle IDs, never executable objects or native pointers.
+  HDF5 references and results derived from them carry trusted provenance.
+  Reference arguments (including nested values, aliases, NumPy conversions and
+  output buffers) fail before serialization. Trusted operations consuming
+  references cannot invoke candidate callbacks.
   Argument graphs preserve object identity within each call. Post-call arrays,
   lists and dictionaries are written back into the original trusted objects,
   including nested aliases and objects detached during the call. Array shape
@@ -87,9 +93,11 @@ Other deliberate changes from supplied Inspect:
   helpers. Tests retain their tolerances, argument order and NumPy semantics.
   Binding inventory parsing runs only inside the bounded candidate process;
   parsing failures produce signed incorrect results. The trusted worker validates
-  the inventory (at most 4,096 names, each at most 1,024 characters). Test ASTs
-  are never rewritten or split. Referenced module constants are fetched as safe
-  data or opaque handles.
+  the inventory (at most 4,096 names, each at most 1,024 characters). Trusted test
+  expressions are instrumented to preserve reference provenance across calls,
+  operators, conversions and attribute reads; assertions are not extracted or
+  split. Packaged test sources remain unchanged. Referenced module constants
+  are fetched as safe data or opaque handles.
   Candidate bindings that shadow builtins, trusted imports or preloaded
   comparison helpers fail closed.
 * Tests run in their original order with a shared trusted namespace. Each

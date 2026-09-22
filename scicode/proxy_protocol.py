@@ -118,37 +118,39 @@ class Proxy:
         return self._rpc_client.request('call', self._rpc_target, args, kwargs)
 
     def __getattr__(self, name):
-        # NumPy's native pointer protocols must never consume candidate data.
-        if name in ('__array_interface__', '__array_struct__'):
-            raise AttributeError(name)
-        return self._rpc_client.request('getattr', self._rpc_target, (name,))
+        # Library protocol discovery is not an explicit object attribute read.
+        # In particular, never expose NumPy's native pointer protocols.
+        # Explicit reads in test source use References.attribute. A library
+        # probing .dtype/.shape/.real must not turn comparison into RPC.
+        raise AttributeError(name)
 
-    def __setattr__(self, name, value):
-        return self._rpc_client.request('setattr', self._rpc_target, (name, value))
+    def __eq__(self, other):
+        return self is other
 
-    def __array__(self, dtype=None, copy=None):
-        import numpy as np
-        wire_dtype = None if dtype is None else np.dtype(dtype).str
-        value = self._rpc_client.request('method', self._rpc_target, ('__array__', wire_dtype))
-        if type(value) is not np.ndarray:
-            self._rpc_client.failed = True
-            raise FailedCall('Invalid array protocol result')
-        return np.array(value, dtype=dtype, copy=True) if copy is True else np.asarray(value, dtype=dtype)
+    def __ne__(self, other):
+        return self is not other
+
+    __hash__ = object.__hash__
+
+    def __bool__(self):
+        return False
+
+    def _unsupported(self, *args, **kwargs):
+        self._rpc_client.failed = True
+        raise FailedCall('Opaque candidate handles do not support value protocols')
+
+    __array__ = __float__ = __int__ = __index__ = __complex__ = _unsupported
+    __len__ = __iter__ = __contains__ = _unsupported
+    __lt__ = __le__ = __gt__ = __ge__ = _unsupported
+    __setattr__ = __getitem__ = __setitem__ = __delitem__ = _unsupported
+
+    # These are deliberately local failures, including reflected and in-place
+    # arithmetic. A failed conversion cannot be caught into a passing test.
 
 
-def _forward_method(name):
-    def forward(self, *args, **kwargs):
-        return self._rpc_client.request('method', self._rpc_target, (name, *args), kwargs)
-    return forward
-
-
-# Python looks special methods up on the type, bypassing __getattr__.
 for _name in (
-    '__getitem__', '__setitem__', '__delitem__', '__len__', '__iter__', '__next__',
-    '__contains__', '__bool__', '__int__', '__float__', '__complex__', '__index__',
     '__neg__', '__pos__', '__abs__', '__invert__', '__round__', '__floor__', '__ceil__',
-    '__trunc__', '__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
-    '__add__', '__sub__', '__mul__', '__truediv__', '__floordiv__', '__mod__',
+    '__trunc__', '__add__', '__sub__', '__mul__', '__truediv__', '__floordiv__', '__mod__',
     '__divmod__', '__pow__', '__matmul__', '__and__', '__or__', '__xor__',
     '__lshift__', '__rshift__', '__radd__', '__rsub__', '__rmul__', '__rtruediv__',
     '__rfloordiv__', '__rmod__', '__rdivmod__', '__rpow__', '__rmatmul__',
@@ -156,18 +158,10 @@ for _name in (
     '__iadd__', '__isub__', '__imul__', '__itruediv__', '__ifloordiv__', '__imod__',
     '__ipow__', '__imatmul__', '__iand__', '__ior__', '__ixor__', '__ilshift__', '__irshift__',
 ):
-    setattr(Proxy, _name, _forward_method(_name))
-
-
-class _RemoteStop(Exception):
-    pass
+    setattr(Proxy, _name, Proxy._unsupported)
 
 
 class _RemoteMissing(Exception):
-    pass
-
-
-class _RemoteNoLength(Exception):
     pass
 
 
@@ -175,6 +169,7 @@ class Client:
     def __init__(self, channel):
         self.channel, self.failed = channel, False
         self.handles = {}
+        self.expected = None
 
     def _pack_remote(self, value):
         if type(value) is not Proxy or value._rpc_client is not self:
@@ -197,31 +192,27 @@ class Client:
                 from .rpc_objects import GraphEncoder, decode_graph
             except ImportError:
                 from rpc_objects import GraphEncoder, decode_graph
+            if operation not in ('call', 'getattr', 'bind'):
+                raise FailedCall('Unsupported proxy operation')
+            if self.expected is not None:
+                self.expected.check_call(args, kwargs)
             encoder = GraphEncoder(self._pack_remote)
             graph = encoder.graph((args, {} if kwargs is None else kwargs))
             originals = [encoder.objects[i] for i in encoder.mutable]
             self.channel.send((operation, target, graph, random_state()))
             reply = self.channel.receive()
             if (type(reply) is not dict or set(reply) != {'status', 'graph', 'updates', 'state'}
-                    or reply['status'] not in ('ok', 'stop', 'missing', 'error', 'no_length')):
+                    or reply['status'] not in ('ok', 'missing', 'error')):
                 raise FailedCall('Invalid candidate reply')
             value, _ = decode_graph(reply['graph'], self._remote, originals, reply['updates'])
             restore_random_state(reply['state'])
-            if reply['status'] == 'stop' and operation == 'method' and args[0] == '__next__':
-                raise _RemoteStop(value)
             if reply['status'] == 'missing' and operation == 'getattr':
                 raise _RemoteMissing(args[0])
-            if reply['status'] == 'no_length' and operation == 'method' and args[0] == '__len__':
-                raise _RemoteNoLength()
             if reply['status'] != 'ok':
                 raise FailedCall('Candidate call failed')
             return value
-        except _RemoteStop as exc:
-            raise StopIteration(*exc.args) from None
         except _RemoteMissing as exc:
             raise AttributeError(*exc.args) from None
-        except _RemoteNoLength:
-            raise TypeError('Remote object has no length') from None
         except MemoryError:
             raise
         except BaseException as exc:

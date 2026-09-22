@@ -15,53 +15,31 @@ def test_recursive_inventory_is_signed_incorrect(tmp_path):
     assert result['verdicts'] == [False]
 
 
-def test_opaque_objects_callables_generators_and_numeric_protocols(tmp_path):
-    code = '''import numpy as np
+def test_opaque_objects_explicit_attributes_methods_and_calls(tmp_path):
+    code = """import numpy as np
 class Number:
     def __init__(self, value): self.value = value
-    def __add__(self, other): return Number(self.value + other)
-    def __rsub__(self, other): return other - self.value
-    def __float__(self): return float(self.value)
-    def __int__(self): return int(self.value)
-    def __neg__(self): return -self.value
-    def __abs__(self): return abs(self.value)
-    def __lt__(self, other): return self.value < other
+    def change(self, value): self.value = value
     def __call__(self, x): return self.value * x
     def array(self): return np.array([self.value])
-    def __array__(self, dtype=None): return np.array([self.value], dtype=dtype)
-class Bag:
-    def __init__(self): self.values = [1, 2, 3]
-    def __len__(self): return len(self.values)
-    def __getitem__(self, key): return self.values[key]
-    def __setitem__(self, key, value): self.values[key] = value
-    def __iter__(self): return iter(self.values)
 def factory(): return Number(4)
 def closure(x): return lambda y: x + y
-def sequence(): yield from range(4)
 def identity(obj): return obj
 def pair():
     obj = Number(3)
     return obj, obj
-'''
-    source = '''n = factory()
+"""
+    source = """n = factory()
 assert n.value == 4 and n(3) == 12
-assert float(n + 2) == 6 and 9 - n == 5
-assert int(n) == 4 and -n == -4 and abs(n) == 4 and n < 5
-n += 3
-assert n.value == 7
-n.value = 8
+n.change(8)
 assert n.value == 8 and np.array_equal(n.array(), [8])
-assert np.array_equal(np.asarray(n, dtype=float), [8.])
 assert identity(n) is n
+assert n == n and not (n != n)
 a, b = pair()
-assert a is b
+assert a is b and a == b
+assert a != n and not (a == n)
 assert closure(5)(6) == 11
-assert list(sequence()) == [0, 1, 2, 3]
-bag = Bag()
-assert len(bag) == 3 and bag[1:] == [2, 3]
-bag[0] = 7
-assert list(bag) == [7, 2, 3]
-'''
+"""
     assert run_signed(tmp_path, code, [source], [None])['verdicts'] == [True]
 
 

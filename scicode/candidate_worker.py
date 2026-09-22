@@ -5,7 +5,6 @@ import sys
 
 
 def serve(code, channel):
-    import operator
     import numpy as np
     from bindings import candidate_bindings
     from proxy_protocol import random_state, restore_random_state
@@ -36,29 +35,8 @@ def serve(code, channel):
                     pass
                 elif operation == 'getattr':
                     value = getattr(value, *args)
-                elif operation == 'setattr':
-                    value = setattr(value, *args)
-                elif operation == 'method':
-                    name, *operands = args
-                    # Use Python's protocols (including reflected/in-place
-                    # fallbacks), rather than requiring every dunder to exist.
-                    unary = {'__iter__': iter, '__next__': next, '__len__': len,
-                             '__bool__': bool, '__int__': int, '__float__': float,
-                             '__complex__': complex, '__round__': round}
-                    if name == '__len__' and not hasattr(type(value), '__len__'):
-                        status, value = 'no_length', None
-                    elif name in unary:
-                        value = unary[name](value, *operands, **kwargs)
-                    elif hasattr(operator, name):
-                        value = getattr(operator, name)(value, *operands, **kwargs)
-                    elif name.startswith('__r') and hasattr(operator, '__' + name[3:]):
-                        value = getattr(operator, '__' + name[3:])(operands[0], value, *operands[1:])
-                    else:
-                        value = getattr(value, name)(*operands, **kwargs)
                 else:
                     raise ValueError('Invalid operation')
-            except StopIteration as exc:
-                status, value = 'stop', exc.value
             except AttributeError:
                 status, value = ('missing' if operation == 'getattr' else 'error'), None
             except BaseException:

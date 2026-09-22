@@ -1,4 +1,4 @@
-"""Resource-limited trusted executor of UNMODIFIED upstream tests.
+"""Resource-limited trusted executor of upstream tests with reference provenance.
 
 No candidate code is evaluated here. Object proxies return data/opaque IDs over
 private pipes; only fixed boolean bytes reach the signing supervisor.
@@ -79,9 +79,11 @@ def execute_tests(request, targets, client):
     try:
         from . import test_util
         from .proxy_protocol import Proxy
+        from .expected_values import References, compile_test
     except ImportError:
         import test_util
         from proxy_protocol import Proxy
+        from expected_values import References, compile_test
 
     # Preserve upstream import paths without importing the application package
     # (which depends on Inspect and is not part of the isolated runtime).
@@ -93,6 +95,9 @@ def execute_tests(request, targets, client):
     namespace = dict(np=np, cmp_tuple_or_list=test_util.cmp_tuple_or_list,
                      are_dicts_close=test_util.are_dicts_close,
                      are_csc_matrix_close=test_util.are_csc_matrix_close)
+    references = References(client)
+    client.expected = references
+    namespace['_scicode_references'] = references
     verdicts = []
     # /dev/null avoids buffering unbounded upstream diagnostics in root memory.
     with open(os.devnull, 'w') as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
@@ -112,11 +117,11 @@ def execute_tests(request, targets, client):
                                else client.request('bind', ('binding', name)))
         for source, target in zip(request['tests'], targets, strict=True):
             client.channel.begin_test()
-            namespace['target'] = target
+            references.remember(target)
+            namespace['target'] = references.wrap(target)
             client.failed = False
             try:
-                # Deliberately no AST rewriting, assertion extraction or eval.
-                exec(source, namespace)
+                exec(compile_test(source), namespace)
                 verdicts.append(not client.failed)
             except MemoryError:
                 raise
