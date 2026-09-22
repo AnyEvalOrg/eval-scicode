@@ -15,12 +15,14 @@ import stat
 import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 import pytest
 from scicode.sandbox_runner import RUNNER, SETUP
 from scicode.receipts import verify_receipt, receipt_failure, FLAGS
 
 
-@pytest.mark.parametrize('case',['pass','mismatch','forge','symlink','hardlink','fifo','invalid','failure','supervisor_error'])
+@pytest.mark.parametrize('case',['pass','mismatch','forge','symlink','hardlink','fifo','invalid','failure','supervisor_error',
+    'exponent','result_overflow','worker_cpu','worker_wall','worker_memory','worker_crash','worker_compare_wall','worker_compare_memory','worker_prerequisite','late_prerequisite'])
 def test_actual_supervisor_signs_only_private_comparisons(tmp_path,monkeypatch,case):
     work=tmp_path/'scicode-fixture';work.mkdir()
     key=b'a'*32
@@ -37,6 +39,7 @@ def test_actual_supervisor_signs_only_private_comparisons(tmp_path,monkeypatch,c
     class Done(Exception):pass
     def exit_(value):raise Done()
     os_proxy=SimpleNamespace(**{n:getattr(os,n) for n in dir(os)})
+    os_proxy.getuid=lambda:0
     os_proxy.chown=lambda *a:None
     os_proxy._exit=exit_
     def run_step(argv,timeout,cwd):
@@ -59,11 +62,74 @@ def test_actual_supervisor_signs_only_private_comparisons(tmp_path,monkeypatch,c
             else:
                 other=Path(cwd)/'other';other.write_bytes(b'private');os.link(other,output)
         elif case=='invalid':output.write_bytes(b'\x80pickle is forbidden')
+        elif case=='result_overflow':output.write_bytes(b'x' * 1024)
+        elif case=='exponent':
+            output.write_text(json.dumps(['list', [['sympy_float', '1e' + '9' * 8000, 53]]]))
+        elif case.startswith('worker_'):
+            from scicode.safe_serialization import dumps
+            output.write_bytes(dumps([7.]))
+
         return status,b'PRIVATE_STDOUT'
+    # Execute the production worker in a separate interpreter. Only Linux
+    # prerequisites / AS are stubbed on this macOS host; CPU and wall deadlines
+    # remain real. Synthetic targets replace the unavailable HDF5 asset.
+    fault = {
+        'worker_cpu': 'while True: pass',
+        'worker_wall': 'import time; time.sleep(60)',
+        'worker_memory': 'raise MemoryError()',
+        'worker_crash': 'import os; os._exit(139)',
+        'worker_compare_wall': 'import time; time.sleep(60)',
+        'worker_compare_memory': 'raise MemoryError()',
+    }.get(case)
+    launches = []
+    def worker_popen(argv, **kwargs):
+        launches.append(argv)
+        wrapper = (
+            'import sys,resource,types;sys.path[:0]=' + repr([str(package), str(Path('.build/test-deps').resolve())]) + ';'
+            'import comparison_worker as worker;'
+            # macOS cannot lower RLIMIT_AS. Validate the exact request, then
+            # retain the native CPU limit (shortened to keep regressions fast).
+            'original_limit=resource.setrlimit;'
+            'resource.setrlimit=lambda kind,bounds: '
+            '(None if kind==resource.RLIMIT_AS else original_limit(kind, (1,1) if kind==resource.RLIMIT_CPU else bounds));'
+            'worker.os.getuid=lambda:0;'
+            'worker.ctypes.CDLL=lambda *args:types.SimpleNamespace(prctl=lambda *args:0);'
+            'sys.modules["process_data"]=types.SimpleNamespace(process_hdf5_to_tuple=lambda step,count:[7.]*count);'
+            'sys.argv=' + repr(['comparison_worker.py', *argv[-2:]]) + ';'
+        )
+        if fault:
+            module, function = ('test_plan', 'compare_plan') if case.startswith('worker_compare_') else ('safe_serialization', 'loads')
+            wrapper += 'import ' + module + ';exec(' + repr('def fail(*args):\n    ' + fault + '\n' + module + '.' + function + '=fail') + ');'
+        if case == 'worker_prerequisite':
+            wrapper += 'worker.prerequisites=lambda:(_ for _ in ()).throw(RuntimeError());'
+        wrapper += 'worker.main()'
+        return subprocess.Popen([sys.executable, '-I', '-c', wrapper], **kwargs)
+
+    root_decodes = []
+    import safe_serialization
+    def forbidden_root_decode(data):
+        root_decodes.append(len(data))
+        # Keep a reverted supervisor from hanging on the actual giant exponent.
+        raise ValueError('Root must not decode candidate bytes')
+    if case == 'exponent':
+        monkeypatch.setattr(safe_serialization, 'loads', forbidden_root_decode)
     namespace={'sys':SimpleNamespace(path=list(sys.path),stdout=stdout),'os':os_proxy,'stat':stat,
-               'json':json,'hashlib':hashlib,'hmac':hmac,'work':str(work),'key':key,'limit':32*1024*1024,
+               'json':json,'hashlib':hashlib,'hmac':hmac,'work':str(work),'key':key,'limit':1024 if case=='result_overflow' else 32*1024*1024,
                'CANDIDATE_UID':os.getuid(),'CANDIDATE_GID':os.getgid(),'request':request,
-               'run_step':run_step,'status':status,'verdicts':[False]}
+               'run_step':run_step,'status':status,'verdicts':[False],
+               'libc':SimpleNamespace(prctl=lambda *a: -1 if case=='late_prerequisite' else 0),
+               'resource':Mock(), 'tempfile':__import__('tempfile'),
+               'subprocess':SimpleNamespace(Popen=worker_popen, DEVNULL=subprocess.DEVNULL,
+                                            TimeoutExpired=subprocess.TimeoutExpired)}
+    namespace['sys'].executable = sys.executable
+    functions = [n for n in ast.parse(RUNNER).body if isinstance(n, ast.FunctionDef) and n.name=='run_comparisons']
+    # Exercise the actual supervisor deadline with a shorter test budget.
+    for function in functions:
+        for node in ast.walk(function):
+            if isinstance(node, ast.keyword) and node.arg=='timeout' and isinstance(node.value, ast.Constant) and node.value.value==10:
+                node.value.value = 2
+    exec(compile(ast.Module(body=functions,type_ignores=[]),'<comparison-supervisor>','exec'),namespace)
+
     final=ast.parse(RUNNER).body[-1]
     with pytest.raises(Done):exec(compile(ast.Module(body=[final],type_ignores=[]),'<supervisor>','exec'),namespace)
     wire=stdout.getvalue()
@@ -75,6 +141,13 @@ def test_actual_supervisor_signs_only_private_comparisons(tmp_path,monkeypatch,c
     assert (receipt_failure(receipt) is None)==(case=='pass')
     assert receipt['verdicts']==[case=='pass']
     assert 'PRIVATE' not in wire and 'candidate()' not in wire
+    assert not root_decodes, 'Signing supervisor decoded candidate-controlled bytes'
+    assert receipt['overflow'] == (case=='result_overflow')
+    if case=='late_prerequisite':
+        assert receipt['supervisor_error']
+    if case.startswith('worker_') or case == 'exponent':
+        assert len(launches) == 1
+
 
 
 @pytest.mark.parametrize('mode,uid,header,valid',[

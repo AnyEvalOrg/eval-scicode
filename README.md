@@ -23,9 +23,10 @@ python scripts/build_dataset.py /path/to/SciCode-clone
 ```
 
 `Sample.input` is exactly `problem_description_main`. Metadata, target, files
-and store contain no reference code, tests or targets. Solvers/scorers close over
-private packaged records; private records are not decorator arguments. The
-sandbox image contains only runtime helpers and the target HDF5 asset, not the
+and store contain no reference code, tests or targets. The solver captures only
+preformatted public prompts, including across generation failures with traceback
+locals enabled. Only the scorer closes over private packaged records; private
+records are not decorator arguments. The sandbox image contains only runtime helpers and the target HDF5 asset, not the
 packaged dev solutions. AnyEval must never mount the source package into a
 candidate sandbox. Private sandbox events and provider diagnostic logs are
 suppressed using the template's pinned Inspect proxy contract, independently
@@ -61,12 +62,15 @@ Other deliberate changes from supplied Inspect:
 
 * The initial user input is the actual main-problem prompt instead of an opaque
   ID. Private record metadata and a candidate-readable HDF5 mount are removed.
-* Root executes the upstream assertions on safely decoded candidate operands.
+* A separate root worker decodes candidate operands and executes the upstream
+  assertions under address-space, CPU and wall-time limits.
   Candidate computation cannot monkeypatch root comparisons or read targets.
   Test ASTs are split from the pinned source, including target unpacking,
-  compound assertions, tolerances, and the dev `are_equivalent` helper. Six dev
-  `test_case_N` wrappers are flattened. Constant input-derived references are
-  recomputed in root. No candidate Python is evaluated by root.
+  compound assertions, tolerances, and the dev `are_equivalent` helper. Nested
+  predicates, reductions, arithmetic, comprehensions and named predicates return
+  underlying numerical outputs; their boolean results are computed in the worker.
+  Six dev `test_case_N` wrappers are flattened. Constant input-derived references are
+  recomputed in the worker. No candidate Python is evaluated by root.
 * Comparisons preserve upstream `cmp_tuple_or_list`, `are_dicts_close`,
   `are_csc_matrix_close` and NumPy allclose semantics, including argument order,
   default `rtol=1e-5`, `atol=1e-8`, `equal_nan=False`, explicit test tolerances,
@@ -82,8 +86,10 @@ Other deliberate changes from supplied Inspect:
 * Safe serialization admits plain types, NumPy scalars/arrays, common sparse
   matrices and constrained symbolic scalar representations. Arbitrary Python
   objects and object-dtype arrays fail closed. Arrays use
-  `np.save(allow_pickle=False)` inside bounded JSON/base64 envelopes. Root checks
-  dtype, shape and byte length before loading with `allow_pickle=False`.
+  `np.save(allow_pickle=False)` inside bounded JSON/base64 envelopes. The worker
+  checks dtype, shape and byte length before loading with `allow_pickle=False`.
+  Expensive symbolic numbers, decoding failures and comparison failures cannot
+  consume the signing supervisor’s execution budget.
   Candidate pickle is never deserialized. BLAS uses one thread.
 * A 32 MiB aggregate result/output limit, template resource limits and the
   security isolation below bound evaluation. These limits and the pinned
@@ -107,11 +113,21 @@ It is large, ignored by git, and excluded from distributions.
 SETUP exercises the template's root/protected-memory check, cross-UID `/proc`
 access, descriptor accounting, RSS visibility, writable OOM adjustment, and
 writable/executable work mount. It also checks target ownership, mode and HDF5
-signature before issuing a random 256-bit HMAC key. RUNNER unlinks the root-only
-request, stages a protected driver, and launches only candidate computation as
+signature, subreaper support, and the comparison worker’s limits/imports before
+issuing a random 256-bit HMAC key. This task exposes no generation-time tools.
+RUNNER unlinks the root-only request, stages a protected driver, and launches only candidate computation as
 UID/GID **65532**, with supplementary groups cleared and `no_new_privs` set.
 The root process is nondumpable; all child descriptors are closed before exec.
-Target values are loaded only after the child and descendants have stopped.
+Target values are loaded by the comparison worker only after the child and
+descendants have stopped. The worker has hard **768 MiB RLIMIT_AS**, **8 seconds
+RLIMIT_CPU**, and a supervisor-enforced **10-second wall deadline** for all tests
+in a step. It starts via exec with no signing key and closes inherited
+descriptors except its redirected standard streams. All candidate result file reads, JSON/NumPy/SymPy decoding and
+numerical comparisons happen there. The supervisor consumes only fixed verdict
+bytes authored by the worker. Worker crashes, timeouts, MemoryError and late
+prerequisite failures yield a **signed INCORRECT**, preserving time to sign
+within the outer deadline. These budgets also apply to target loading and can
+affect unusually expensive comparisons.
 
 The inherited template bounds NPROC at 64, NOFILE at 256, AS/DATA at 1 GiB,
 CORE at zero, and file size at the output limit. A 50 ms watchdog bounds
@@ -204,8 +220,10 @@ with `pip install --target .build/test-deps ...` when the caller's environment
 must remain untouched. The suite performs no network or model calls and does
 not run arbitrary candidates on the developer host. Its supervisor protocol
 fixtures use authored child programs and stub Linux credential/prerequisite
-operations; they do not claim to prove kernel containment. The actual Linux
-supervisor path is used by the canonical check.
+operations, including RLIMIT_AS on macOS; they do not claim to prove kernel
+containment. Authored comparison workers exercise real process separation,
+CPU/wall deadlines, crashes, MemoryError and signed failure handling. The actual
+Linux supervisor path is used by the canonical check.
 
 ```sh
 PYTHONPATH=. python -m pytest -q
@@ -214,8 +232,9 @@ PYTHONPATH=. python -m pytest -q
 Tests cover all packaged IDs and target-free samples/plans, byte-equal upstream
 prompts, comparisons against retained upstream helpers, safe serialization,
 actual signing/comparison code with authored fixtures, receipt forgery,
-watchdogs, SETUP prerequisites, missing-receipt/kernel attribution, private
-publication, and real Helm rendering. Helm must be on PATH.
+watchdogs, SETUP prerequisites, missing-receipt/kernel attribution, generation
+traceback privacy, nested numerical predicates, bounded comparison-worker
+failures, private publication, and real Helm rendering. Helm must be on PATH.
 
 ## Historical published baselines and licensing
 

@@ -1,4 +1,4 @@
-"""The supplied Inspect sequential chat protocol, with private record closures."""
+"""The supplied Inspect sequential chat protocol, retaining only public prompts."""
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser
 from inspect_ai.solver import solver
 from .dataset import load_records
@@ -20,16 +20,23 @@ def composed_code(record, messages, step):
 
 @solver
 def solve_scicode_problem(provide_scientific_background=False):
-    records = {r['problem_id']: r for r in load_records(True)}
     initial = INITIAL_PROMPT_PROVIDE_BACKGROUND if provide_scientific_background else INITIAL_PROMPT
     template = SUBPROBLEM_PROMPT_PROVIDE_BACKGROUND if provide_scientific_background else SUBPROBLEM_PROMPT
+    # This factory frame ends before generation. Neither the closure nor any
+    # suspended solve frame may retain private records in traceback locals.
+    prompts = {
+        r['problem_id']: (
+            initial.format(required_dependencies=r['required_dependencies']),
+            tuple(template.format(**step) for step in r['sub_steps']),
+        ) for r in load_records(True)
+    }
 
     async def solve(state, generate):
-        record = records[str(state.sample_id)]
+        system_prompt, step_prompts = prompts[str(state.sample_id)]
         # system_message upstream formats required_dependencies from metadata.
-        state.messages.insert(0, ChatMessageSystem(content=initial.format(required_dependencies=record['required_dependencies'])))
-        for step in record['sub_steps']:
-            state.messages.append(ChatMessageUser(content=template.format(**step)))
+        state.messages.insert(0, ChatMessageSystem(content=system_prompt))
+        for prompt in step_prompts:
+            state.messages.append(ChatMessageUser(content=prompt))
             state = await generate(state)
         return state
     return solve

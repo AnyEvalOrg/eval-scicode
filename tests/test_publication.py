@@ -49,3 +49,41 @@ def test_private_logging_is_context_scoped(caplog):
     assert 'PRIVATE' not in caplog.text and 'PUBLIC' in caplog.text
     with pytest.raises(TypeError):
         with private_grading(object()):pass
+
+
+@pytest.mark.parametrize('background', [False, True])
+def test_generation_traceback_locals_contain_only_public_prompts(monkeypatch, background):
+    import copy
+    import importlib
+    from inspect_ai._util.rich import format_traceback
+    solver_module = importlib.import_module('scicode.solver')
+    record = copy.deepcopy(solver_module.load_records(True)[0])
+    record['general_solution'] = 'PRIVATE_REFERENCE_SENTINEL'
+    for step in record['sub_steps']:
+        step['ground_truth_code'] = 'PRIVATE_REFERENCE_SENTINEL'
+        step['test_cases'] = ['PRIVATE_TEST_SENTINEL']
+    monkeypatch.setattr(solver_module, 'load_records', lambda *args: [record])
+    monkeypatch.setenv('INSPECT_TRACEBACK_LOCALS', '1')
+    solve = solver_module.solve_scicode_problem(background)
+    state = SimpleNamespace(sample_id=record['problem_id'], messages=[])
+
+    async def generate(state):
+        raise RuntimeError('generation failed')
+
+    async def capture():
+        try:
+            await solve(state, generate)
+        except RuntimeError as error:
+            # Begin at the solver frame, as Inspect's error logger would.
+            tb = error.__traceback__.tb_next
+            rendered = str(format_traceback(type(error), error, tb))
+            while tb:
+                # Inspect pretty-printers may truncate long locals. Check the
+                # complete frame locals too so private records cannot hide there.
+                rendered += repr(tb.tb_frame.f_locals)
+                tb = tb.tb_next
+            return rendered
+    exported = asyncio.run(capture())
+    assert 'PRIVATE_REFERENCE_SENTINEL' not in exported
+    assert 'PRIVATE_TEST_SENTINEL' not in exported
+    assert 'PRIVATE_REFERENCE_SENTINEL' not in repr([c.cell_contents for c in solve.__closure__])

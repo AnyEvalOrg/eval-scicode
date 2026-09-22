@@ -1,3 +1,4 @@
+import ast
 import base64
 import io
 import json
@@ -109,3 +110,49 @@ def test_symbolic_numbers_preserve_upstream_comparison_behavior(value):
 def test_object_arrays_are_never_coerced_to_passing_numeric_results():
     with pytest.raises(ValueError,match='Object arrays'):
         dumps(np.array([sympy.Integer(1)],dtype=object))
+
+
+@pytest.mark.parametrize('source,bad,good', [
+    ('assert (np.abs(np.mean(actual - 100) / 100) < .1) == target', [np.array([900.])], [np.array([105.])]),
+    ('assert (np.mean(actual) == 0) == target', [np.array([1.])], [np.array([0.])]),
+    ('assert ((np.abs(actual) < .1).all(), np.isclose(other, 2)) == target',
+     [np.array([9.]), 2.], [np.array([.01]), 2.]),
+])
+def test_nested_predicates_compare_raw_numerical_outputs(source, bad, good):
+    plan = split_test(source)
+    target = (True, True) if 'other' in source else True
+    assert not compare_plan(plan, bad, target)
+    assert compare_plan(plan, good, target)
+    # A child monkeypatch which returns the target boolean for the predicate
+    # cannot stand in for an incorrect raw result (the first two old plans did).
+    if 'other' not in source:
+        assert plan['operands'] == ['actual']
+        assert not compare_plan(plan, [True], target)
+
+
+@pytest.mark.parametrize('step_id', ['77.12', '60.5', '64.6', '35.3', '80.7'])
+def test_packaged_nested_predicates_cannot_be_replaced_with_expected_boolean(step_id):
+    from scicode.dataset import load_records
+    step = next(s for r in load_records(True) for s in r['sub_steps'] if s['step_number'] == step_id)
+    for source in step['test_cases']:
+        plan = split_test(source)
+        assert not compare_plan(plan, [True], True)
+        assert all(not any(isinstance(n, (ast.Compare, ast.BoolOp))
+                           for n in ast.walk(ast.parse(op)))
+                   for op in plan['operands'])
+        assert any(name in plan['operands'] for name in ('T_sim', 'mu_ext_list', 'Num_particle_Trace', 'A', 'instant_T_array'))
+
+
+def test_named_predicates_use_underlying_results():
+    plan = split_test('actual = candidate()\npassed = np.isclose(actual, 100)\nassert passed == target')
+    assert plan['operands'] == ['actual']
+    assert not compare_plan(plan, [True], True)
+    assert not compare_plan(plan, [900.], True)
+    assert compare_plan(plan, [100.], True)
+
+
+def test_generator_predicate_stays_in_trusted_comparison():
+    plan = split_test('actual = candidate()\nassert all(x > 10 for x in actual) == target')
+    assert plan['operands'] == ['actual']
+    assert compare_plan(plan, [[11, 12]], True)
+    assert not compare_plan(plan, [[1, 2]], True)

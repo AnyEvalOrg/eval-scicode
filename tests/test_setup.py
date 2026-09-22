@@ -95,6 +95,12 @@ def setup_probe(tmp_path):
         return child
 
     def run(argv, **kwargs):
+        if argv[-1] == '--probe':
+            step('comparison_probe')
+            assert kwargs['check'] and kwargs['timeout'] == 3
+            assert kwargs['close_fds']
+            assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == -3
+            return
         step('script_exec')
         script = Path(argv[0])
         assert script.read_text() == '#!/bin/sh\n: > writable\n'
@@ -142,7 +148,7 @@ def test_setup_prerequisites_happy_path(setup_probe):
 @pytest.mark.parametrize('failure', [
     'work_directory', 'probe_directory', 'probe_owner', 'proc_list', 'oom_open', 'oom_write',
     'descriptor_stat', 'status_read', 'wrong_uid', 'missing_rss', 'script_write',
-    'script_chmod', 'script_exec', 'child_write', 'child_spawn',
+    'script_chmod', 'script_exec', 'child_write', 'child_spawn', 'comparison_probe',
 ])
 def test_each_prerequisite_failure_exits_without_key_or_details(setup_probe, monkeypatch, failure):
     namespace, fault, _, child = setup_probe
@@ -160,3 +166,25 @@ def test_each_prerequisite_failure_exits_without_key_or_details(setup_probe, mon
     if failure in {'descriptor_stat', 'status_read', 'wrong_uid', 'missing_rss', 'script_exec', 'child_write'}:
         child.kill.assert_called_once_with()
         child.wait.assert_called_once_with(timeout=1)
+
+
+def test_comparison_worker_prerequisites_enforce_hard_limits_before_work(monkeypatch):
+    import scicode.comparison_worker as worker
+    events = []
+    monkeypatch.setattr(worker.resource, 'setrlimit', lambda kind, bounds: events.append((kind, bounds)))
+    monkeypatch.setattr(worker.os, 'getuid', lambda: 0)
+    monkeypatch.setattr(worker.ctypes, 'CDLL', lambda *a: SimpleNamespace(prctl=lambda *a: 0))
+    worker.prerequisites()
+    assert events == [
+        (worker.resource.RLIMIT_AS, (768 * 1024**2, 768 * 1024**2)),
+        (worker.resource.RLIMIT_CPU, (8, 8)),
+        (worker.resource.RLIMIT_CORE, (0, 0)),
+    ]
+
+
+def test_subreaper_is_checked_before_setup_issues_key(setup_probe):
+    namespace, _, _, _ = setup_probe
+    namespace['libc'] = SimpleNamespace(prctl=lambda option, *args: -1 if option == 36 else 0)
+    with pytest.raises(SystemExit):
+        execute_setup(namespace)
+    namespace['secrets'].token_hex.assert_not_called()

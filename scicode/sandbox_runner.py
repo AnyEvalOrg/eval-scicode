@@ -93,6 +93,8 @@ def check_prerequisites(work):
     # and executable work mount before issuing a key or launching a compiler.
     if os.getuid() != 0 or libc.prctl(4, 0, 0, 0, 0) != 0:
         raise RuntimeError()
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise RuntimeError()
     os.listdir("/proc")
     with open("/proc/self/oom_score_adj", "r+") as stream:
         value = stream.read()
@@ -149,6 +151,13 @@ try:
     work = tempfile.mkdtemp(prefix="scicode-", dir="/tmp")
     check_prerequisites(work)
     check_test_data()
+    # Exercise the real worker limits and imports before candidate activity.
+    subprocess.run(
+        [sys.executable, "-I", "/opt/scicode/runtime/comparison_worker.py", "--probe"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, check=True, timeout=3,
+        env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+    )
     key = secrets.token_hex(32)
     request["key"] = key
     with open(os.path.join(work, "request.json"), "x", encoding="utf-8") as f:
@@ -180,11 +189,6 @@ import time
 CANDIDATE_UID = 65532
 CANDIDATE_GID = 65532
 libc = ctypes.CDLL(None, use_errno=True)
-if os.getuid() != 0 or libc.prctl(4, 0, 0, 0, 0) != 0:
-    raise RuntimeError("root Linux supervisor with protected memory required")
-resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-    raise RuntimeError("subreaper required")
 work = sys.argv[1]
 request_path = os.path.join(work, "request.json")
 with open(request_path, encoding="utf-8") as f:
@@ -492,16 +496,51 @@ def run_step(argv, timeout, candidate_work):
         return status, output
 
 
+def run_comparisons(plans, candidate_work):
+    comparison_request = os.path.join(work, "comparison.json")
+    with open(comparison_request, "x", encoding="utf-8") as stream:
+        json.dump({"plans": plans, "step_id": request["step_id"],
+                   "output_limit": limit, "candidate_uid": CANDIDATE_UID}, stream)
+    os.chmod(comparison_request, 0o600)
+    # exec keeps the HMAC key out of the worker; no candidate output is parsed
+    # or compared by this supervisor. stdout contains only worker-authored bits.
+    with tempfile.TemporaryFile(dir=work) as results:
+        child = subprocess.Popen(
+            [sys.executable, "-I", "/opt/scicode/runtime/comparison_worker.py",
+             comparison_request, candidate_work],
+            cwd="/", stdin=subprocess.DEVNULL, stdout=results,
+            stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True,
+            env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+        )
+        try:
+            if child.wait(timeout=10) != 0:
+                return [False] * len(plans)
+            results.seek(0)
+            bits = results.read(len(plans) + 2)
+            if len(bits) != len(plans) + 1 or any(bit not in (0, 1) for bit in bits):
+                return [False] * len(plans)
+            status["overflow"] = bool(bits[0])
+            return [bool(bit) for bit in bits[1:]]
+        except subprocess.TimeoutExpired:
+            return [False] * len(plans)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=1)
+
+
 status = dict(returncode=125, timeout=False, overflow=False, memory_exceeded=False, disk_exceeded=False,
               cleanup_failed=False, supervisor_error=False)
 verdicts = [False] * len(request["tests"])
 try:
+    if os.getuid() != 0 or libc.prctl(4, 0, 0, 0, 0) != 0:
+        raise RuntimeError("root Linux supervisor with protected memory required")
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise RuntimeError("subreaper required")
     # Imports resolve only from the root-owned image, never a candidate directory.
     sys.path.insert(0, "/opt/scicode/runtime")
-    from test_plan import split_test, compare_plan
-    from safe_serialization import loads
-    import process_data
-    process_data.H5PY_FILE = "/opt/scicode/test_data.h5"
+    from test_plan import split_test
     plans = [split_test(test) for test in request["tests"]]
     # No target file/descriptors have been opened when the child is forked.
     candidate_work = os.path.join(work, "candidate")
@@ -526,24 +565,7 @@ try:
     if status["returncode"] == 0 and not any(status[flag] for flag in
             ("timeout", "overflow", "memory_exceeded", "disk_exceeded", "cleanup_failed", "supervisor_error")):
         # Descendants are dead before root reads any candidate file or target.
-        targets = process_data.process_hdf5_to_tuple(request["step_id"], len(plans))
-        total_bytes = 0
-        for index, plan in enumerate(plans):
-            try:
-                path = os.path.join(candidate_work, "result-" + str(index))
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                with os.fdopen(fd, "rb") as stream:
-                    info = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid != CANDIDATE_UID or info.st_nlink != 1:
-                        raise ValueError()
-                    data = stream.read(max(0, limit - total_bytes) + 1)
-                total_bytes += len(data)
-                if total_bytes >= limit:
-                    status["overflow"] = True
-                    break
-                verdicts[index] = compare_plan(plan, loads(data), targets[index])
-            except Exception:
-                verdicts[index] = False
+        verdicts = run_comparisons(plans, candidate_work)
 except Exception:
     status["supervisor_error"] = True
 finally:
