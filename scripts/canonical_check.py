@@ -14,11 +14,10 @@ IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-s
 
 
 def check_step(code, step, timeout, dependencies=''):
-    bindings = runpy.run_path(str(ROOT/'scicode/bindings.py'))['candidate_bindings']
     runner = runpy.run_path(str(ROOT/'scicode/sandbox_runner.py'))
     receipts = runpy.run_path(str(ROOT/'scicode/receipts.py'))
     request = {'code': code, 'step_id': step['step_number'], 'tests': step['test_cases'],
-               'bindings': bindings(code, step['test_cases']), 'dependencies': dependencies,
+               'dependencies': dependencies,
                'timeout': timeout, 'output_limit': 32*1024*1024}
     setup = subprocess.run([sys.executable,'-I','-c',runner['SETUP']], input=json.dumps(request),
                            capture_output=True,text=True,timeout=10)

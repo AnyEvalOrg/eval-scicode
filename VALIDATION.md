@@ -4,11 +4,11 @@ The requested command was run without an editable install:
 
 ```sh
 PYTHONPATH=.:.build/test-deps PATH=/private/tmp/claude-501/-Users-jperla-josh/e031f182-dde4-417e-9aee-73c830d18854/scratchpad/bin:$PATH /Users/jperla/josh/repos/anyeval-app/.venv/bin/python -m pytest -q tests/test_proxy_execution.py -k local_dev_ground_truth
-PYTHONPATH=.:.build/test-deps PATH=/private/tmp/claude-501/-Users-jperla-josh/e031f182-dde4-417e-9aee-73c830d18854/scratchpad/bin:$PATH /Users/jperla/josh/repos/anyeval-app/.venv/bin/python -m pytest -q -k 'not local_dev_ground_truth'
+PYTHONPATH=.:.build/test-deps PATH=/private/tmp/claude-501/-Users-jperla-josh/e031f182-dde4-417e-9aee-73c830d18854/scratchpad/bin:$PATH /Users/jperla/josh/repos/anyeval-app/.venv/bin/python -m pytest -q
 ```
 
-Results: **48 passed, 2 failed** dev steps and **334 passed** other tests
-(combined **382 passed, 2 failed, 0 skipped**). Both custom and provider Helm
+Results: **48 passed, 2 failed** dev steps. The full requested command reports
+**400 passed, 2 failed, 0 skipped** (including **352 passing non-dev tests**). Both custom and provider Helm
 charts were rendered with the actual Helm executable. `git diff --check` passed.
 
 The AST test splitter has been deleted. Fixtures exercise the actual supervisor
@@ -18,15 +18,37 @@ includes helper forgery in 72.1/72.2/72.3/72.5, the chained NumPy predicates in
 61.5/73.9/78.2, loop-built values and shared test variables in 52.4, candidate
 function references, constants, aliases, recursion, sparse component transport,
 malformed/partial/oversized replies, per-test aggregate reply budgets, trusted-binding
-shadowing, callable/object
-rejection, executor CPU/wall failures, crashes, MemoryError and signed failures.
+shadowing, opaque callable/object handles, executor CPU/wall failures, crashes, MemoryError and signed failures.
 
 All **50 dev ground-truth steps** ran with the supplied read-only HDF5 symlink.
 Steps **6.1, 7.1 and 47.4 now pass**. Regression coverage adds large fixture
 target sets, budgets spanning multiple tests and calls, permanently rejected
 channels, shared NumPy/Python random streams (including seeds and cached
-Gaussian values), and malformed candidate PRNG states. The **51 proxy
-regression tests pass**. No packaged assertions, targets, or step exclusions changed.
+Gaussian values), and malformed candidate PRNG states. The existing **51 proxy regression tests pass**. No packaged assertions, targets, or step exclusions changed.
+
+Candidate binding inventory now runs inside the resource-limited candidate
+worker, including in the image-backed canonical script. The valid 1,001-term
+addition source raises the reproduced inventory RecursionError there and
+produces a signed incorrect receipt. A scorer regression exercises real worker
+subprocesses behind the sandbox adapter and verifies SETUP, RUNNER and cleanup
+calls, with an INCORRECT score instead of a harness exception.
+
+New object-protocol regressions cover opaque classes, instances, closures and
+generators; attributes and methods; indexing, iteration and numeric operations;
+handle limits; malformed graphs; rejection of native NumPy pointer interfaces;
+shared argument identities; nested/cyclic lists and dictionaries; detached
+mutable arguments; array/list/dict updates in place across calls; and rejected
+array shape/dtype changes. Unchanged arrays use a lossless state marker, keeping
+6.1 and 7.1 within the existing 32 MiB per-test traffic budget.
+
+Steps **30.1, 46.1 and 68.1** run their unchanged upstream tests against the real
+HDF5 targets using an authored analytic Slater implementation. **13.12** runs
+its unchanged tests with an authored finite-difference Maxwell/ICN reference;
+its fixture targets come from direct execution of that reference, with an
+independent central-divergence calculation. These four steps are in the test
+split and have no locally packaged ground truth. The Maxwell fixture verifies
+object transport and retained remote state, not agreement with the unpublished
+upstream implementation. All **17 new object-protocol tests pass**.
 
 **78.3 and 70.8 remain failures**, also reproduced with unchanged tests and
 ground truth in one plain Python process. 78.3 cases 1–3 select fine-timestep

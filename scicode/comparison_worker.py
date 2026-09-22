@@ -1,6 +1,6 @@
 """Resource-limited trusted executor of UNMODIFIED upstream tests.
 
-No candidate code is evaluated here. Function proxies return plain data over
+No candidate code is evaluated here. Object proxies return data/opaque IDs over
 private pipes; only fixed boolean bytes reach the signing supervisor.
 """
 import ctypes
@@ -97,20 +97,19 @@ def execute_tests(request, targets, client):
     # /dev/null avoids buffering unbounded upstream diagnostics in root memory.
     with open(os.devnull, 'w') as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
         exec(request.get('dependencies', ''), namespace)
-        for name, kind in request['bindings'].items():
+        import ast
+        referenced = {n.id for source in request['tests'] for n in ast.walk(ast.parse(source))
+                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        for name, kind in client.bindings.items():
+            if kind != 'call' and name not in referenced:
+                continue
             # Test predicates and reference imports must never resolve to a
             # candidate's replacement for all/abs/cmp_tuple_or_list/etc. Reject
             # collisions instead of allowing a proxy to hijack trusted setup.
             if name in namespace or name in vars(builtins):
                 raise RuntimeError('Candidate shadows a trusted binding')
-            if kind == 'call':
-                namespace[name] = Proxy(client, name)
-            else:
-                binding = client.request('bind', name)
-                if (type(binding) is not tuple or len(binding) != 2
-                        or binding[0] not in ('call', 'value')):
-                    raise RuntimeError('Invalid candidate binding')
-                namespace[name] = Proxy(client, name) if binding[0] == 'call' else binding[1]
+            namespace[name] = (Proxy(client, ('binding', name)) if kind == 'call'
+                               else client.request('bind', ('binding', name)))
         for source, target in zip(request['tests'], targets, strict=True):
             client.channel.begin_test()
             namespace['target'] = target
@@ -141,10 +140,18 @@ def main():
     targets = process_data.process_hdf5_to_tuple(request['step_id'], len(request['tests']))
     channel = Channel(int(sys.argv[2]), int(sys.argv[3]), request['timeout'], request['output_limit'])
     ready = channel.receive()
-    if type(ready) is not tuple or len(ready) != 2 or ready[0] is not True:
+    if type(ready) is not tuple or len(ready) != 3 or ready[0] is not True:
         raise RuntimeError('Candidate initialization failed')
     restore_random_state(ready[1])
-    verdicts = execute_tests(request, targets, Client(channel))
+    bindings = ready[2]
+    if (type(bindings) is not dict or len(bindings) > 4096
+            or any(type(name) is not str or len(name) > 1024 or not name.isidentifier()
+                   or type(kind) is not str or kind not in ('call', 'get')
+                   for name, kind in bindings.items())):
+        raise RuntimeError('Invalid binding inventory')
+    client = Client(channel)
+    client.bindings = bindings
+    verdicts = execute_tests(request, targets, client)
     # Publish only after all tests finish. Crash/MemoryError leaves no successes.
     sys.stdout.buffer.write(bytes(verdicts))
 

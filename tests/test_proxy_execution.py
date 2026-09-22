@@ -130,12 +130,12 @@ def candidate(value, *, scale):
 
 def test_failed_call_cannot_be_caught_into_pass(tmp_path):
     source = 'try:\n    candidate()\nexcept Exception:\n    pass\nassert True'
-    assert run_signed(tmp_path, 'def candidate(): return object()', [source], [None])['verdicts'] == [False]
+    assert run_signed(tmp_path, 'def candidate(): raise ValueError()', [source], [None])['verdicts'] == [False]
 
 
-def test_inventory_never_executes_candidate_and_omits_unused_globals():
+def test_candidate_worker_inventory_never_executes_source():
     code = 'raise RuntimeError()\nunused = 1\nconstant = 2\nclass Foo: pass\ndef f(): pass'
-    assert candidate_bindings(code, ['assert constant == 2\nFoo()']) == {'constant':'get','Foo':'call','f':'call'}
+    assert candidate_bindings(code) == {'unused':'get','constant':'get','Foo':'get','f':'call'}
 
 
 @pytest.mark.parametrize('record,step', [(r,s) for r in load_records(dev_only=True) for s in r['sub_steps']],

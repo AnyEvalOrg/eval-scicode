@@ -75,7 +75,7 @@ def test_every_upstream_test_is_transmitted_unchanged(record):
                                     dependencies=record['required_dependencies'])
         assert request['tests'] is step['test_cases']
         assert request['dependencies'] == record['required_dependencies']
-        assert request['bindings'] == {'candidate': 'call'}
+        assert 'bindings' not in request  # Candidate source is opaque on the host.
 
 
 def test_supplied_inspect_keeps_original_known_bad_steps():

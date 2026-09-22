@@ -1,13 +1,11 @@
-"""Inventory candidate module bindings without executing any candidate source.
+"""Inventory candidate bindings INSIDE the resource-limited candidate worker.
 
 This is name discovery only. Upstream tests are never rewritten or partitioned.
 """
 import ast
 
 
-def candidate_bindings(code, tests):
-    referenced = {n.id for source in tests for n in ast.walk(ast.parse(source))
-                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+def candidate_bindings(code):
     bindings = {}
 
     class Inventory(ast.NodeVisitor):
@@ -17,11 +15,10 @@ def candidate_bindings(code, tests):
         visit_AsyncFunctionDef = visit_FunctionDef
 
         def visit_ClassDef(self, node):
-            if node.name in referenced:
-                bindings[node.name] = 'call'
+            bindings[node.name] = 'get'
 
         def visit_Name(self, node):
-            if isinstance(node.ctx, ast.Store) and node.id in referenced:
+            if isinstance(node.ctx, ast.Store):
                 bindings[node.id] = 'get'
 
         # Imports are supplied from the pinned dependency source on the trusted
@@ -40,9 +37,7 @@ def candidate_bindings(code, tests):
         def visit_Lambda(self, node):
             pass
 
-    try:
-        Inventory().visit(ast.parse(code))
-    except (SyntaxError, ValueError):
-        # Invalid candidate source fails in the candidate, yielding a receipt.
-        return {}
+    # Parsing/visitor failures terminate candidate initialization. The supervisor
+    # signs INCORRECT; the host never inspects or parses this source.
+    Inventory().visit(ast.parse(code))
     return bindings

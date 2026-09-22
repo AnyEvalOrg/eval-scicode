@@ -67,8 +67,17 @@ Other deliberate changes from supplied Inspect:
   functions are proxies: arguments and results cross private pipes using the
   bounded data-only format. The candidate code is executed once in its own
   process, so candidate functions share a namespace and call each other there.
-  Candidate function arguments are transmitted as name-only references back
-  into that namespace. Root never evaluates candidate source or unpickles bytes.
+  Candidate functions and classes are callable proxies. Instances, callables,
+  iterators and other non-data results remain in a candidate-side table of at
+  most 4,096 opaque handles. Attribute access, calls, indexing, iteration and
+  numeric operations are forwarded; root receives only validated data and
+  handle IDs, never executable objects or native array pointers.
+  Argument graphs preserve object identity within each call. Post-call arrays,
+  lists and dictionaries are written back into the original trusted objects,
+  including nested aliases and objects detached during the call. Array shape
+  or dtype changes that cannot be applied in place fail the call. Unchanged
+  arrays use a lossless state marker to avoid consuming the reply budget twice.
+  Subsequent calls receive the updated argument state.
   NumPy's module-level PRNG and Python's `random` state are synchronized at
   initialization and around calls using validated plain data. Test seeds,
   interleaved draws, and cached Gaussian values therefore cross the process
@@ -76,8 +85,11 @@ Other deliberate changes from supplied Inspect:
 * Pinned dependency imports and upstream `test_util` helpers live in the trusted
   executor. The original `scicode.compare.cmp` import path resolves to those
   helpers. Tests retain their tolerances, argument order and NumPy semantics.
-  Only binding names are inventoried from candidate source; test ASTs are never
-  rewritten or split. Referenced module constants are fetched as safe data.
+  Binding inventory parsing runs only inside the bounded candidate process;
+  parsing failures produce signed incorrect results. The trusted worker validates
+  the inventory (at most 4,096 names, each at most 1,024 characters). Test ASTs
+  are never rewritten or split. Referenced module constants are fetched as safe
+  data or opaque handles.
   Candidate bindings that shadow builtins, trusted imports or preloaded
   comparison helpers fail closed.
 * Tests run in their original order with a shared trusted namespace. Each
@@ -89,7 +101,9 @@ Other deliberate changes from supplied Inspect:
   denominator stays fixed. A main problem passes only when all its steps pass.
 * Safe serialization admits plain types, NumPy scalars/arrays, common sparse
   matrices (data/index components, without densification) and constrained symbolic scalar representations. Arbitrary Python
-  objects and object-dtype arrays fail closed. Arrays use
+  objects travel only as opaque handles; object-dtype arrays fail closed. Graphs
+  are bounded by node count, nesting depth and the existing frame/traffic limits.
+  Arrays use
   `np.save(allow_pickle=False)` inside bounded JSON/base64 envelopes. The worker
   checks dtype, shape and byte length before loading with `allow_pickle=False`.
   Expensive symbolic numbers, decoding failures and comparison failures cannot
@@ -267,6 +281,8 @@ The proxy repairs address general transport and execution behavior:
   Each large reply was 13,653,744 bytes; even the two-call final cases fit
   within 32 MiB, but accumulated replies from earlier tests did not. The
   per-test budget fixes both steps without removing frame or traffic limits.
+  Mutation replies represent unchanged input arrays by reference to their
+  original state, keeping the two-call cases within that same budget.
 * **47.4:** all three assertions failed because `np.random.seed(1024)` ran
   only in the trusted test process. Synchronizing random state in both
   directions preserves the Monte Carlo stream across calls and later tests.

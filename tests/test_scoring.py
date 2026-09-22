@@ -110,3 +110,31 @@ def test_dead_or_unclean_sandbox_is_not_reused(monkeypatch):
     score=asyncio.run(scoring.verify()(state,Target('')))
     assert score.value==INCORRECT and run.await_count==1
     assert json.loads(score.explanation)['subproblems_total']==3
+
+
+def test_recursive_candidate_inventory_reaches_sandbox_and_scores_incorrect(tmp_path, monkeypatch):
+    from proxy_harness import run_signed
+
+    class RealWorkerSandbox(FakeSandbox):
+        async def exec(self, cmd, input=None, **kwargs):
+            if SETUP in cmd:
+                self.payload = json.loads(input)
+            if RUNNER in cmd:
+                self.calls.append(cmd)
+                result = run_signed(tmp_path, self.payload['code'], self.payload['tests'], [None])
+                assert result['verdicts'] == [False]
+                return ExecResult(True, 0, signed(**result), '')
+            return await super().exec(cmd, input=input, **kwargs)
+
+    record = {'problem_id': 'fixture', 'required_dependencies': '', 'sub_steps': [
+        {'step_number': 'fixture.1', 'test_cases': ['assert True']}]}
+    fake = RealWorkerSandbox()
+    monkeypatch.setattr(scoring, 'load_records', lambda *a: [record])
+    monkeypatch.setattr(scoring, 'sandbox', lambda: SandboxEnvironmentProxy(fake))
+    state = SimpleNamespace(sample_id='fixture', messages=[
+        ChatMessageAssistant(content='```python\nx=' + '+'.join(['1'] * 1001) + '\n```')])
+    score = asyncio.run(scoring.verify()(state, Target('')))
+    assert score.value == INCORRECT
+    assert any(SETUP in call for call in fake.calls)
+    assert any(RUNNER in call for call in fake.calls)
+    assert any(call == CLEANUP_COMMAND for call in fake.calls)

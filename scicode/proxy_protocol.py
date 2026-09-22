@@ -107,58 +107,121 @@ def restore_random_state(state):
 
 
 class Proxy:
-    def __init__(self, client, name):
-        self.client, self.name = client, name
+    """Local facade; only data and opaque references cross the pipe."""
+    __slots__ = ('_rpc_client', '_rpc_target')
+
+    def __init__(self, client, target):
+        object.__setattr__(self, '_rpc_client', client)
+        object.__setattr__(self, '_rpc_target', target)
 
     def __call__(self, *args, **kwargs):
-        return self.client.request('call', self.name, pack_arguments(args), pack_arguments(kwargs))
+        return self._rpc_client.request('call', self._rpc_target, args, kwargs)
+
+    def __getattr__(self, name):
+        # NumPy's native pointer protocols must never consume candidate data.
+        if name in ('__array_interface__', '__array_struct__'):
+            raise AttributeError(name)
+        return self._rpc_client.request('getattr', self._rpc_target, (name,))
+
+    def __setattr__(self, name, value):
+        return self._rpc_client.request('setattr', self._rpc_target, (name, value))
+
+    def __array__(self, dtype=None, copy=None):
+        import numpy as np
+        wire_dtype = None if dtype is None else np.dtype(dtype).str
+        value = self._rpc_client.request('method', self._rpc_target, ('__array__', wire_dtype))
+        if type(value) is not np.ndarray:
+            self._rpc_client.failed = True
+            raise FailedCall('Invalid array protocol result')
+        return np.array(value, dtype=dtype, copy=True) if copy is True else np.asarray(value, dtype=dtype)
 
 
-def pack_arguments(value):
-    # Only trusted-created proxy references travel in this direction. Returned
-    # callable/object values are always rejected by the ordinary wire decoder.
-    if type(value) is Proxy:
-        return ('ref', value.name)
-    if type(value) in (list, tuple):
-        return ('tuple' if type(value) is tuple else 'list', [pack_arguments(v) for v in value])
-    if type(value) is dict:
-        return ('dict', [(pack_arguments(k), pack_arguments(v)) for k, v in value.items()])
-    return ('value', value)
+def _forward_method(name):
+    def forward(self, *args, **kwargs):
+        return self._rpc_client.request('method', self._rpc_target, (name, *args), kwargs)
+    return forward
 
 
-def unpack_arguments(value, namespace):
-    kind, data = value
-    if kind == 'ref':
-        return namespace[data]
-    if kind == 'tuple':
-        return tuple(unpack_arguments(v, namespace) for v in data)
-    if kind == 'list':
-        return [unpack_arguments(v, namespace) for v in data]
-    if kind == 'dict':
-        return {unpack_arguments(k, namespace): unpack_arguments(v, namespace) for k, v in data}
-    if kind == 'value':
-        return data
-    raise ValueError('Invalid argument')
+# Python looks special methods up on the type, bypassing __getattr__.
+for _name in (
+    '__getitem__', '__setitem__', '__delitem__', '__len__', '__iter__', '__next__',
+    '__contains__', '__bool__', '__int__', '__float__', '__complex__', '__index__',
+    '__neg__', '__pos__', '__abs__', '__invert__', '__round__', '__floor__', '__ceil__',
+    '__trunc__', '__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
+    '__add__', '__sub__', '__mul__', '__truediv__', '__floordiv__', '__mod__',
+    '__divmod__', '__pow__', '__matmul__', '__and__', '__or__', '__xor__',
+    '__lshift__', '__rshift__', '__radd__', '__rsub__', '__rmul__', '__rtruediv__',
+    '__rfloordiv__', '__rmod__', '__rdivmod__', '__rpow__', '__rmatmul__',
+    '__rand__', '__ror__', '__rxor__', '__rlshift__', '__rrshift__',
+    '__iadd__', '__isub__', '__imul__', '__itruediv__', '__ifloordiv__', '__imod__',
+    '__ipow__', '__imatmul__', '__iand__', '__ior__', '__ixor__', '__ilshift__', '__irshift__',
+):
+    setattr(Proxy, _name, _forward_method(_name))
+
+
+class _RemoteStop(Exception):
+    pass
+
+
+class _RemoteMissing(Exception):
+    pass
+
+
+class _RemoteNoLength(Exception):
+    pass
 
 
 class Client:
     def __init__(self, channel):
         self.channel, self.failed = channel, False
+        self.handles = {}
 
-    def request(self, operation, name, args=None, kwargs=None):
+    def _pack_remote(self, value):
+        if type(value) is not Proxy or value._rpc_client is not self:
+            raise ValueError('Unsupported trusted argument')
+        return value._rpc_target
+
+    def _remote(self, kind, data):
+        if kind != 'handle':
+            raise ValueError('Candidate returned a binding reference')
+        key = data['handle']
+        if key not in self.handles:
+            self.handles[key] = Proxy(self, (kind, data))
+        elif self.handles[key]._rpc_target[1] != data:
+            raise ValueError('Handle type changed')
+        return self.handles[key]
+
+    def request(self, operation, target, args=(), kwargs=None):
         try:
-            self.channel.send((operation, name, args, kwargs,
-                               random_state() if operation == 'call' else None))
+            try:
+                from .rpc_objects import GraphEncoder, decode_graph
+            except ImportError:
+                from rpc_objects import GraphEncoder, decode_graph
+            encoder = GraphEncoder(self._pack_remote)
+            graph = encoder.graph((args, {} if kwargs is None else kwargs))
+            originals = [encoder.objects[i] for i in encoder.mutable]
+            self.channel.send((operation, target, graph, random_state()))
             reply = self.channel.receive()
-            if type(reply) is not tuple or len(reply) != 2 or reply[0] is not True:
+            if (type(reply) is not dict or set(reply) != {'status', 'graph', 'updates', 'state'}
+                    or reply['status'] not in ('ok', 'stop', 'missing', 'error', 'no_length')):
+                raise FailedCall('Invalid candidate reply')
+            value, _ = decode_graph(reply['graph'], self._remote, originals, reply['updates'])
+            restore_random_state(reply['state'])
+            if reply['status'] == 'stop' and operation == 'method' and args[0] == '__next__':
+                raise _RemoteStop(value)
+            if reply['status'] == 'missing' and operation == 'getattr':
+                raise _RemoteMissing(args[0])
+            if reply['status'] == 'no_length' and operation == 'method' and args[0] == '__len__':
+                raise _RemoteNoLength()
+            if reply['status'] != 'ok':
                 raise FailedCall('Candidate call failed')
-            value = reply[1]
-            if operation == 'call':
-                if type(value) is not tuple or len(value) != 2:
-                    raise FailedCall('Invalid call result')
-                value, state = value
-                restore_random_state(state)
             return value
+        except _RemoteStop as exc:
+            raise StopIteration(*exc.args) from None
+        except _RemoteMissing as exc:
+            raise AttributeError(*exc.args) from None
+        except _RemoteNoLength:
+            raise TypeError('Remote object has no length') from None
         except MemoryError:
             raise
         except BaseException as exc:
