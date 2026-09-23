@@ -158,7 +158,8 @@ def test_local_dev_ground_truth(tmp_path, record, step):
                       *(s['ground_truth_code'] for s in record['sub_steps'][:index+1])])
     result = run_signed(tmp_path, code, step['test_cases'], targets,
                         dependencies=record['required_dependencies'], timeout=300)
-    assert receipt_failure(result) is None, result
+    failed_cases = [i for i, passed in enumerate(result['verdicts'], 1) if not passed]
+    assert receipt_failure(result) is None, f"{step['step_number']}: failed cases {failed_cases}; receipt={result}"
 
 
 def test_supervisor_never_decodes_candidate_bytes(tmp_path, monkeypatch):

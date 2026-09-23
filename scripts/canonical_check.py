@@ -11,8 +11,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0'
-# Reference code fails unchanged stored targets in the pinned image.
-KNOWN_UPSTREAM_DEFECTS = frozenset({'78.3', '70.8'})
+# One-based case indices whose reference code fails unchanged stored targets.
+KNOWN_UPSTREAM_DEFECTS = {'78.3': frozenset({1, 2, 3}), '70.8': frozenset({4})}
 
 
 def check_step(code, step, timeout, dependencies='', peak_rss=False):
@@ -42,9 +42,12 @@ def check_step(code, step, timeout, dependencies='', peak_rss=False):
             cleanup = subprocess.run(command,capture_output=True,timeout=10)
             if cleanup.returncode not in ((0,1) if command == runner['CLEANUP_COMMAND'] else (0,)):
                 raise RuntimeError('Cleanup failed')
-    result = {'step':step['step_number'],'passed':failure is None,'reason':failure or 'all tests passed'}
+    failed_cases = [index for index, passed in enumerate(receipt['verdicts'], start=1) if not passed]
+    result = {'step':step['step_number'],'passed':failure is None,'reason':failure or 'all tests passed',
+              'failed_cases':failed_cases}
     result['status'] = ('passed' if failure is None else 'known_upstream_defect'
-                        if result['step'] in KNOWN_UPSTREAM_DEFECTS and failure == 'test comparison failed'
+                        if failure == 'test comparison failed'
+                        and set(failed_cases) == KNOWN_UPSTREAM_DEFECTS.get(result['step'])
                         else 'failed')
     if peak_rss:
         result['peak_candidate_rss_bytes'] = receipt['peak_candidate_rss_bytes']

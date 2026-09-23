@@ -236,13 +236,18 @@ Do not use editable installs in an AnyEval registry environment.
 Every dev step has `ground_truth_code`; the test records do not provide
 per-step ground truth. `scripts/canonical_check.py` composes the dev solutions,
 runs the **real SETUP/RUNNER**, verifies HMAC receipts, and runs all **50 dev
-steps**. Comparison failures for **78.3 and 70.8** are reported separately as
-`known_upstream_defect`; they remain failed comparisons, not passes. It exits
+steps**. A step is reported as `known_upstream_defect` only when the authenticated
+per-case verdicts fail exactly the documented **one-based case indices**:
+**78.3 cases 1, 2, 3**, or **70.8 case 4**, with every other case passing.
+Any other comparison failure pattern is unexpected, including an extra failing
+case, a missing documented failure, or all four cases of 70.8 failing.
+Known defects remain failed comparisons, not passes. It exits
 0 when every other step passes (normally **48 passed, 2 known upstream defects**),
 1 for unexpected failures, and 2 for infrastructure/check errors. Memory,
 timeout, cleanup and other failures are unexpected even on those two steps.
-It emits only step IDs, statuses, counts and image/revision provenance, plus
-optional numeric RSS measurements; it does not modify the task population.
+It emits only step IDs, statuses, failing case indices (`failed_cases`), counts
+and image/revision provenance, plus optional numeric RSS measurements; it does
+not modify the task population.
 Run in a disposable Linux container through:
 
 ```sh
@@ -320,7 +325,7 @@ They also reproduce with unchanged tests in one host Python process using
 Dev problems are not published, so no exclusion from the published **65 main
 problems** is needed. All 50 dev steps still execute with their original assertions:
 
-| Step | Failing cases | Host diagnosis |
+| Step | Failing cases (one-based) | Host diagnosis |
 | --- | --- | --- |
 | 78.3 | 1–3 | The timing-weighted error metric selects `dt=0.001`, returning shapes `(10001, 2)`, `(20001, 2)`, `(15001, 2)`. Targets have shapes `(2, 2)`, `(3, 2)`, `(2, 2)` and match trajectories at `dt=10`. `np.allclose` raises a broadcasting `ValueError`. |
 | 70.8 | 4 (1–3 pass) | `AssertionError`; maximum probability error about `1.7914e-4`. At `L=1.611792e22`, computed phases are of order `1e10`. A relative Hamiltonian perturbation of `1e-15` changes a probability by about `1.2502e-4`, demonstrating sensitivity to floating-point rounding. |

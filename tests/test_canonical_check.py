@@ -32,7 +32,8 @@ def test_canonical_calls_real_supervisor_and_authenticates(monkeypatch,passed,st
     monkeypatch.setattr(canonical.subprocess,'run',run)
     result=canonical.check_step('authored fixture',{'step_number':step_id,'test_cases':['assert 1 == target']},3,peak_rss=peak_rss)
     assert result['passed'] is passed
-    assert result['status'] == ('passed' if passed else 'failed' if step_id == '1.1' else 'known_upstream_defect')
+    assert result['status'] == ('passed' if passed else 'failed')
+    assert result['failed_cases'] == ([] if passed else [1])
     assert ('peak_candidate_rss_bytes' in result) is peak_rss
     assert ('measure_peak_rss' in json.loads(calls[0][1]['input'])) is peak_rss
     if peak_rss:
@@ -50,16 +51,47 @@ def test_cloudbuild_runs_reference_check_with_supervisor_capabilities():
     assert config['substitutions']['_SANDBOX_IMAGE'].endswith('eval-scicode-sandbox:1.0.0')
 
 
-@pytest.mark.parametrize('reason_flag', ['memory_exceeded', 'timeout', 'cleanup_failed', 'supervisor_error'])
+@pytest.mark.parametrize('step_id,verdicts,status', [
+    ('78.3', [False, False, False], 'known_upstream_defect'),
+    ('70.8', [True, True, True, False], 'known_upstream_defect'),
+    ('78.3', [False, False, False, False], 'failed'),  # An additional case fails.
+    ('70.8', [False, True, True, False], 'failed'),
+    ('70.8', [False, False, False, False], 'failed'),
+    ('78.3', [True, False, False], 'failed'),  # A documented failure is missing.
+    ('70.8', [False, True, True, True], 'failed'),  # Same count, different case.
+    ('78.3', [True, True, True], 'passed'),
+    ('70.8', [True, True, True, True], 'passed'),
+    ('1.1', [False, False, False], 'failed'),
+])
+def test_known_defects_require_exact_authenticated_case_failures(monkeypatch, step_id, verdicts, status):
+    def run(command, **kwargs):
+        if SETUP in command:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({'cwd':WORK,'key':KEY.hex()}))
+        if RUNNER in command:
+            return SimpleNamespace(returncode=0, stdout=signed(verdicts=verdicts))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(canonical.subprocess, 'run', run)
+    result = canonical.check_step('fixture', {'step_number':step_id,'test_cases':['assert True']*len(verdicts)}, 3)
+    assert result['status'] == status
+    assert result['passed'] is (status == 'passed')
+    assert result['failed_cases'] == [i for i, passed in enumerate(verdicts, 1) if not passed]
+    assert canonical.summarize_results([result]) == {
+        'passed':int(status == 'passed'), 'total':1,
+        'known_upstream_defects':int(status == 'known_upstream_defect'),
+        'unexpected_failures':int(status == 'failed'),
+    }
+
+
+@pytest.mark.parametrize('reason_flag', ['memory_exceeded', 'disk_exceeded', 'timeout', 'overflow', 'cleanup_failed', 'supervisor_error'])
 def test_known_defect_does_not_mask_operational_failure(monkeypatch, reason_flag):
     def run(command, **kwargs):
         if SETUP in command:
             return SimpleNamespace(returncode=0, stdout=json.dumps({'cwd':WORK,'key':KEY.hex()}))
         if RUNNER in command:
-            return SimpleNamespace(returncode=0, stdout=signed(verdicts=[False], **{reason_flag:True}))
+            return SimpleNamespace(returncode=0, stdout=signed(verdicts=[False]*3, **{reason_flag:True}))
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(canonical.subprocess, 'run', run)
-    result = canonical.check_step('fixture', {'step_number':'78.3','test_cases':['assert True']}, 3)
+    result = canonical.check_step('fixture', {'step_number':'78.3','test_cases':['assert True']*3}, 3)
     assert result['status'] == 'failed'
     assert canonical.summarize_results([result])['unexpected_failures'] == 1
 
