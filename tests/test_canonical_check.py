@@ -45,7 +45,7 @@ def test_canonical_calls_real_supervisor_and_authenticates(monkeypatch,passed,st
 def test_cloudbuild_runs_reference_check_with_supervisor_capabilities():
     config=yaml.safe_load(Path('scripts/cloudbuild-canonical.yaml').read_text())
     command=config['steps'][0]['args'][-1]
-    for text in ['--cap-add SYS_PTRACE','--cap-add SETUID','--network none','--read-only','--memory 4g','--peak-rss','scripts/canonical_check.py']:
+    for text in ['--cap-add SYS_PTRACE','--cap-add SETUID','--network none','--read-only','--memory 6g','--peak-rss','scripts/canonical_check.py']:
         assert text in command
     assert config['substitutions']['_SANDBOX_IMAGE'].endswith('eval-scicode-sandbox:1.0.0')
 

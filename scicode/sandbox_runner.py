@@ -71,10 +71,10 @@ def restrict_child(nofile=256):
     # These hard limits and the irreversible credential drop survive exec.
     resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
     resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, nofile))
-    # 3 GiB virtual space per process allows mappings above the 2.5 GiB RSS cap.
-    # Aggregate resident memory is bounded separately within the 4 GiB pod.
-    resource.setrlimit(resource.RLIMIT_AS, (3 * 1024**3, 3 * 1024**3))
-    resource.setrlimit(resource.RLIMIT_DATA, (3 * 1024**3, 3 * 1024**3))
+    # 5 GiB virtual space per process allows mappings above the 4 GiB RSS cap.
+    # Aggregate resident memory is bounded separately within the 6 GiB pod.
+    resource.setrlimit(resource.RLIMIT_AS, (5 * 1024**3, 5 * 1024**3))
+    resource.setrlimit(resource.RLIMIT_DATA, (5 * 1024**3, 5 * 1024**3))
     resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 '''
@@ -227,7 +227,7 @@ def candidate_rss():
                 # VmRSS is in KiB; zombies may have no VmRSS entry.
                 # gVisor counts shared copy-on-write pages in each process's
                 # VmRSS, so a 64-child fork storm can hit this aggregate cap.
-                # The 2.5 GiB budget covers the entire candidate UID,
+                # The 4 GiB budget covers the entire candidate UID,
                 # including detached descendants and compiler/JVM chains.
                 total += int(fields.get("VmRSS", "0 kB").split()[0]) * 1024
         except (PermissionError, FileNotFoundError, ProcessLookupError):
@@ -259,7 +259,7 @@ def watch_memory(pgid, stopped, status):
             rss = candidate_rss()
             if "peak_candidate_rss_bytes" in status:
                 status["peak_candidate_rss_bytes"] = max(status["peak_candidate_rss_bytes"], rss)
-            if rss > 2560 * 1024**2:
+            if rss > 4096 * 1024**2:
                 status["memory_exceeded"] = True
                 kill_candidate(pgid)
                 return

@@ -158,15 +158,15 @@ The signing supervisor consumes only fixed verdict bytes authored by the worker.
 Executor crashes, timeouts, MemoryError and late prerequisite failures yield a
 **signed INCORRECT**, preserving time to sign within the outer deadline.
 
-The inherited template bounds NPROC at 64, NOFILE at 256, AS/DATA at 3 GiB,
+The inherited template bounds NPROC at 64, NOFILE at 256, AS/DATA at 5 GiB,
 CORE at zero, and file size at the output limit. A 50 ms watchdog bounds
-aggregate candidate RSS at 2.5 GiB. A 100 ms disk watchdog bounds `/tmp`,
+aggregate candidate RSS at 4 GiB. A 100 ms disk watchdog bounds `/tmp`,
 `/var/tmp`, `/dev/shm` and descriptor-retained files/memfds at 256 MiB / 10,000
 entries, deduplicated by inode. Root has SYS_PTRACE for cross-UID descriptor
 accounting; the irreversible child credential drop clears capabilities.
-The 4 GiB pod budget allocates 2560 MiB to candidate RSS, up to 768 MiB to
+The 6 GiB pod budget allocates 4096 MiB to candidate RSS, up to 768 MiB to
 the executor address space, and 256 MiB to watched files, leaving 512 MiB
-for the supervisor, runtime overhead and sampling bursts. Per-process 3 GiB
+for the supervisor, runtime overhead and sampling bursts. Per-process 5 GiB
 AS/DATA limits allow virtual mappings above the aggregate resident-memory cap.
 Sampling cannot enumerate all kernel memory allocations; pod attribution is
 the backstop. Pipe replies have bounded length-prefixed frames and a 32 MiB
@@ -192,7 +192,7 @@ incorrect. The per-sample pod is then discarded.
 
 The Helm chart uses gVisor, Spot nodes, no service-account token, root read-only
 filesystem, disk-backed `/tmp`, read-only `/dev/shm`, requests equal to limits
-(1 CPU / 4 GiB RAM / 1 GiB ephemeral storage), and a release-scoped deny-all
+(1 CPU / 6 GiB RAM / 1 GiB ephemeral storage), and a release-scoped deny-all
 Ingress/Egress NetworkPolicy. Compose mirrors capabilities, isolation and
 memory/PID limits; its anonymous `/tmp` volume has no portable disk quota.
 The template watchdog remains active. `anyeval_chart=False` explicitly opts
@@ -250,7 +250,7 @@ gcloud builds submit --config scripts/cloudbuild-canonical.yaml .
 ```
 
 Cloud Build launches the image with the same UID-dropping capabilities,
-read-only root, no network, 4 GiB budget and PID limit as Compose. The source
+read-only root, no network, 6 GiB budget and PID limit as Compose. The source
 mount is for this operator-only reference check, never for production
 candidates. The config enables `--peak-rss`: each result and the summary include
 `peak_candidate_rss_bytes`, the maximum aggregate candidate RSS observed by the

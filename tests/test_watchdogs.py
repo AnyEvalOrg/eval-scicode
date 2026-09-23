@@ -32,13 +32,13 @@ def test_candidate_preexec_limits_and_oom_preference(nofile):
     namespace = dict(libc=SimpleNamespace(prctl=lambda *args: 0), os=fake_os, resource=fake_resource, CANDIDATE_UID=65532, CANDIDATE_GID=65532, limit=4096, open=opened)
     exec(compile(ast.Module(body=[restrict], type_ignores=[]), '<preexec>', 'exec'), namespace)
     namespace['restrict_child'](nofile)
-    assert limits.call_args_list == [((resource.RLIMIT_NPROC, (64, 64)),), ((resource.RLIMIT_NOFILE, (nofile, nofile)),), ((resource.RLIMIT_AS, (3 * 1024 ** 3, 3 * 1024 ** 3)),), ((resource.RLIMIT_DATA, (3 * 1024 ** 3, 3 * 1024 ** 3)),), ((resource.RLIMIT_FSIZE, (4096, 4096)),), ((resource.RLIMIT_CORE, (0, 0)),)]
+    assert limits.call_args_list == [((resource.RLIMIT_NPROC, (64, 64)),), ((resource.RLIMIT_NOFILE, (nofile, nofile)),), ((resource.RLIMIT_AS, (5 * 1024 ** 3, 5 * 1024 ** 3)),), ((resource.RLIMIT_DATA, (5 * 1024 ** 3, 5 * 1024 ** 3)),), ((resource.RLIMIT_FSIZE, (4096, 4096)),), ((resource.RLIMIT_CORE, (0, 0)),)]
     opened.assert_called_once_with('/proc/self/oom_score_adj', 'w')
     opened().write.assert_called_once_with('1000')
     fake_os.setresuid.assert_called_once_with(65532, 65532, 65532)
 
 @pytest.mark.parametrize('entry_error', [PermissionError, FileNotFoundError, ProcessLookupError])
-@pytest.mark.parametrize('rss_kib, exceeded', [(2560 * 1024, False), (2560 * 1024 + 1, True)])
+@pytest.mark.parametrize('rss_kib, exceeded', [(4096 * 1024, False), (4096 * 1024 + 1, True)])
 def test_watchdog_sums_only_candidate_rss_and_kills_detached_sessions(rss_kib, exceeded, entry_error):
     from io import StringIO
     from types import SimpleNamespace
