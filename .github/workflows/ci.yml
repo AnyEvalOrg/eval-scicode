@@ -1,0 +1,25 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The job name is the required status check on main; keep it "validate".
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: azure/setup-helm@v4
+        with: { version: v3.19.0 }
+      - name: Install the package with its test extras
+        run: python -m pip install ".[test]"
+      - name: Test suite
+        # test_data.h5 (1 GB, Google Drive) is not fetched in CI; the dev
+        # ground-truth tests skip without it. The operator runs them in the image
+        # via scripts/cloudbuild-canonical.yaml.
+        run: python -m pytest -q -p no:cacheprovider
