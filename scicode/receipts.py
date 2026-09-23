@@ -19,6 +19,10 @@ def verify_receipt(stdout, key):
                 or type(receipt['verdicts']) is not list
                 or any(type(v) is not bool for v in receipt['verdicts'])):
             return None
+        if 'peak_candidate_rss_bytes' in receipt:
+            peak = receipt['peak_candidate_rss_bytes']
+            if type(peak) is not int or peak < 0:
+                return None
         return receipt
     except (ValueError,TypeError,KeyError,AttributeError,UnicodeError):
         return None

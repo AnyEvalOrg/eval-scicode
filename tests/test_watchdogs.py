@@ -32,13 +32,13 @@ def test_candidate_preexec_limits_and_oom_preference(nofile):
     namespace = dict(libc=SimpleNamespace(prctl=lambda *args: 0), os=fake_os, resource=fake_resource, CANDIDATE_UID=65532, CANDIDATE_GID=65532, limit=4096, open=opened)
     exec(compile(ast.Module(body=[restrict], type_ignores=[]), '<preexec>', 'exec'), namespace)
     namespace['restrict_child'](nofile)
-    assert limits.call_args_list == [((resource.RLIMIT_NPROC, (64, 64)),), ((resource.RLIMIT_NOFILE, (nofile, nofile)),), ((resource.RLIMIT_AS, (1024 ** 3, 1024 ** 3)),), ((resource.RLIMIT_DATA, (1024 ** 3, 1024 ** 3)),), ((resource.RLIMIT_FSIZE, (4096, 4096)),), ((resource.RLIMIT_CORE, (0, 0)),)]
+    assert limits.call_args_list == [((resource.RLIMIT_NPROC, (64, 64)),), ((resource.RLIMIT_NOFILE, (nofile, nofile)),), ((resource.RLIMIT_AS, (3 * 1024 ** 3, 3 * 1024 ** 3)),), ((resource.RLIMIT_DATA, (3 * 1024 ** 3, 3 * 1024 ** 3)),), ((resource.RLIMIT_FSIZE, (4096, 4096)),), ((resource.RLIMIT_CORE, (0, 0)),)]
     opened.assert_called_once_with('/proc/self/oom_score_adj', 'w')
     opened().write.assert_called_once_with('1000')
     fake_os.setresuid.assert_called_once_with(65532, 65532, 65532)
 
 @pytest.mark.parametrize('entry_error', [PermissionError, FileNotFoundError, ProcessLookupError])
-@pytest.mark.parametrize('rss_kib, exceeded', [(768 * 1024, False), (768 * 1024 + 1, True)])
+@pytest.mark.parametrize('rss_kib, exceeded', [(2560 * 1024, False), (2560 * 1024 + 1, True)])
 def test_watchdog_sums_only_candidate_rss_and_kills_detached_sessions(rss_kib, exceeded, entry_error):
     from io import StringIO
     from types import SimpleNamespace
@@ -59,9 +59,9 @@ def test_watchdog_sums_only_candidate_rss_and_kills_detached_sessions(rss_kib, e
     namespace = dict(os=fake_os, open=opened, signal=signal, CANDIDATE_UID=65532)
     exec(compile(ast.Module(body=functions, type_ignores=[]), '<watchdog>', 'exec'), namespace)
     assert namespace['candidate_rss']() == rss_kib * 1024
-    status = dict(memory_exceeded=False)
+    status = dict(memory_exceeded=False, peak_candidate_rss_bytes=0)
     namespace['watch_memory'](11, stopped, status)
-    assert status == dict(memory_exceeded=exceeded)
+    assert status == dict(memory_exceeded=exceeded, peak_candidate_rss_bytes=rss_kib * 1024)
     if exceeded:
         fake_os.killpg.assert_called_once_with(11, signal.SIGKILL)
         assert [call.args for call in fake_os.kill.call_args_list] == [(11, signal.SIGKILL), (12, signal.SIGKILL), (14, signal.SIGKILL)]
@@ -269,3 +269,17 @@ def disk_scan_namespace():
     namespace = dict(os=os, errno=errno, stat=stat, CANDIDATE_UID=65532)
     exec(compile(ast.Module(body=[function], type_ignores=[]), '<disk-scan>', 'exec'), namespace)
     return namespace
+
+
+@pytest.mark.parametrize('measure', [False, True])
+def test_peak_rss_retains_maximum_across_watchdog_samples(measure):
+    from unittest.mock import Mock
+    watcher = next(n for n in ast.parse(RUNNER).body if isinstance(n, ast.FunctionDef) and n.name == 'watch_memory')
+    namespace = dict(candidate_rss=Mock(side_effect=[4096, 8192, 2048]), kill_candidate=Mock())
+    exec(compile(ast.Module(body=[watcher], type_ignores=[]), '<watch>', 'exec'), namespace)
+    stopped = Mock()
+    stopped.is_set.side_effect = [False, False, False, True]
+    status = {'peak_candidate_rss_bytes':0} if measure else {}
+    namespace['watch_memory'](11, stopped, status)
+    assert status == ({'peak_candidate_rss_bytes':8192} if measure else {})
+    namespace['kill_candidate'].assert_not_called()

@@ -71,9 +71,10 @@ def restrict_child(nofile=256):
     # These hard limits and the irreversible credential drop survive exec.
     resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
     resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, nofile))
-    # Half the production pod's 2 GiB budget leaves supervisor headroom.
-    resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
-    resource.setrlimit(resource.RLIMIT_DATA, (1024**3, 1024**3))
+    # 3 GiB virtual space per process allows mappings above the 2.5 GiB RSS cap.
+    # Aggregate resident memory is bounded separately within the 4 GiB pod.
+    resource.setrlimit(resource.RLIMIT_AS, (3 * 1024**3, 3 * 1024**3))
+    resource.setrlimit(resource.RLIMIT_DATA, (3 * 1024**3, 3 * 1024**3))
     resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 '''
@@ -226,8 +227,8 @@ def candidate_rss():
                 # VmRSS is in KiB; zombies may have no VmRSS entry.
                 # gVisor counts shared copy-on-write pages in each process's
                 # VmRSS, so a 64-child fork storm can hit this aggregate cap.
-                # Legitimate compiler/JVM chains have only a handful of
-                # processes and stay far below the 768 MiB aggregate budget.
+                # The 2.5 GiB budget covers the entire candidate UID,
+                # including detached descendants and compiler/JVM chains.
                 total += int(fields.get("VmRSS", "0 kB").split()[0]) * 1024
         except (PermissionError, FileNotFoundError, ProcessLookupError):
             pass
@@ -255,7 +256,10 @@ def kill_candidate(pgid):
 def watch_memory(pgid, stopped, status):
     try:
         while not stopped.is_set():
-            if candidate_rss() > 768 * 1024**2:
+            rss = candidate_rss()
+            if "peak_candidate_rss_bytes" in status:
+                status["peak_candidate_rss_bytes"] = max(status["peak_candidate_rss_bytes"], rss)
+            if rss > 2560 * 1024**2:
                 status["memory_exceeded"] = True
                 kill_candidate(pgid)
                 return
@@ -453,6 +457,8 @@ def run_proxy_tests(candidate_work):
     verdicts = [False] * len(request["tests"])
     status = dict(returncode=125, timeout=False, overflow=False, memory_exceeded=False, disk_exceeded=False,
                   cleanup_failed=False, supervisor_error=False)
+    if request.get("measure_peak_rss") is True:
+        status["peak_candidate_rss_bytes"] = 0
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": candidate_work,
            "TMPDIR": candidate_work, "MPLCONFIGDIR": candidate_work,
            "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
@@ -525,6 +531,8 @@ status = dict(returncode=125, timeout=False, overflow=False, memory_exceeded=Fal
               cleanup_failed=False, supervisor_error=False)
 verdicts = [False] * len(request["tests"])
 try:
+    if request.get("measure_peak_rss") is True:
+        status["peak_candidate_rss_bytes"] = 0
     if os.getuid() != 0 or libc.prctl(4, 0, 0, 0, 0) != 0:
         raise RuntimeError("root Linux supervisor with protected memory required")
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))

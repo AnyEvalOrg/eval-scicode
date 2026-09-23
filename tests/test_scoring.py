@@ -138,3 +138,9 @@ def test_recursive_candidate_inventory_reaches_sandbox_and_scores_incorrect(tmp_
     assert any(SETUP in call for call in fake.calls)
     assert any(RUNNER in call for call in fake.calls)
     assert any(call == CLEANUP_COMMAND for call in fake.calls)
+
+
+@pytest.mark.parametrize('peak', [0, 123456, -1, True, 1.5, '123', None])
+def test_optional_peak_rss_receipt_is_a_nonnegative_integer(peak):
+    receipt = verify_receipt(signed(peak_candidate_rss_bytes=peak), KEY)
+    assert (receipt is not None) is (type(peak) is int and peak >= 0)

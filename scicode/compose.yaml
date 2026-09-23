@@ -18,6 +18,6 @@ services:
     cap_add: [SETUID, SETGID, KILL, CHOWN, DAC_OVERRIDE, SYS_PTRACE]
     security_opt:
       - no-new-privileges:true
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 1.0
     pids_limit: 128

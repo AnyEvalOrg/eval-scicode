@@ -158,12 +158,16 @@ The signing supervisor consumes only fixed verdict bytes authored by the worker.
 Executor crashes, timeouts, MemoryError and late prerequisite failures yield a
 **signed INCORRECT**, preserving time to sign within the outer deadline.
 
-The inherited template bounds NPROC at 64, NOFILE at 256, AS/DATA at 1 GiB,
+The inherited template bounds NPROC at 64, NOFILE at 256, AS/DATA at 3 GiB,
 CORE at zero, and file size at the output limit. A 50 ms watchdog bounds
-aggregate candidate RSS at 768 MiB. A 100 ms disk watchdog bounds `/tmp`,
+aggregate candidate RSS at 2.5 GiB. A 100 ms disk watchdog bounds `/tmp`,
 `/var/tmp`, `/dev/shm` and descriptor-retained files/memfds at 256 MiB / 10,000
 entries, deduplicated by inode. Root has SYS_PTRACE for cross-UID descriptor
 accounting; the irreversible child credential drop clears capabilities.
+The 4 GiB pod budget allocates 2560 MiB to candidate RSS, up to 768 MiB to
+the executor address space, and 256 MiB to watched files, leaving 512 MiB
+for the supervisor, runtime overhead and sampling bursts. Per-process 3 GiB
+AS/DATA limits allow virtual mappings above the aggregate resident-memory cap.
 Sampling cannot enumerate all kernel memory allocations; pod attribution is
 the backstop. Pipe replies have bounded length-prefixed frames and a 32 MiB
 aggregate receive budget per trusted test (and separately for initialization
@@ -171,7 +175,8 @@ and binding setup). Only the trusted test loop resets that budget; the step's
 wall/CPU deadlines remain unchanged. A rejected frame permanently invalidates
 the channel. Malformed, oversized and unsupported results fail
 closed; result files are no longer used.
-Receipts contain only statuses, per-test booleans and a working-directory ID.
+Receipts contain only statuses, per-test booleans, a working-directory ID and,
+when requested by the canonical check, a numeric peak candidate RSS in bytes.
 No code, candidate streams, targets or answer bytes enter explanations/logs.
 
 An authenticated failure is **INCORRECT**. After successful SETUP, missing or
@@ -187,7 +192,7 @@ incorrect. The per-sample pod is then discarded.
 
 The Helm chart uses gVisor, Spot nodes, no service-account token, root read-only
 filesystem, disk-backed `/tmp`, read-only `/dev/shm`, requests equal to limits
-(1 CPU / 2 GiB RAM / 1 GiB ephemeral storage), and a release-scoped deny-all
+(1 CPU / 4 GiB RAM / 1 GiB ephemeral storage), and a release-scoped deny-all
 Ingress/Egress NetworkPolicy. Compose mirrors capabilities, isolation and
 memory/PID limits; its anonymous `/tmp` volume has no portable disk quota.
 The template watchdog remains active. `anyeval_chart=False` explicitly opts
@@ -230,21 +235,31 @@ Do not use editable installs in an AnyEval registry environment.
 
 Every dev step has `ground_truth_code`; the test records do not provide
 per-step ground truth. `scripts/canonical_check.py` composes the dev solutions,
-runs the **real SETUP/RUNNER**, verifies HMAC receipts, and expects **50/50 dev
-steps** to pass. It exits nonzero on any failure, without creating exclusions
-or modifying the task population. It emits only step IDs, statuses, counts and
-image/revision provenance. Infrastructure failures exit separately. Run in a
-disposable Linux container through:
+runs the **real SETUP/RUNNER**, verifies HMAC receipts, and runs all **50 dev
+steps**. Comparison failures for **78.3 and 70.8** are reported separately as
+`known_upstream_defect`; they remain failed comparisons, not passes. It exits
+0 when every other step passes (normally **48 passed, 2 known upstream defects**),
+1 for unexpected failures, and 2 for infrastructure/check errors. Memory,
+timeout, cleanup and other failures are unexpected even on those two steps.
+It emits only step IDs, statuses, counts and image/revision provenance, plus
+optional numeric RSS measurements; it does not modify the task population.
+Run in a disposable Linux container through:
 
 ```sh
 gcloud builds submit --config scripts/cloudbuild-canonical.yaml .
 ```
 
 Cloud Build launches the image with the same UID-dropping capabilities,
-read-only root, no network, 2 GiB budget and PID limit as Compose. The source
+read-only root, no network, 4 GiB budget and PID limit as Compose. The source
 mount is for this operator-only reference check, never for production
-candidates. No claim of a successful full canonical run is bundled here: the
-large HDF5 asset/image must be built and this command run by the operator.
+candidates. The config enables `--peak-rss`: each result and the summary include
+`peak_candidate_rss_bytes`, the maximum aggregate candidate RSS observed by the
+50 ms watchdog (bytes, including descendants, excluding the root executor).
+This sampled maximum can miss peaks between polls. Without the flag, the field
+is omitted. The summary is the maximum across all 50 steps. No candidate data
+is included. The operator’s original 2 GiB run reported **47/50 passed**:
+10.11 hit the old 768 MiB candidate cap, and the two known defects failed
+comparison. Rerun with the new budget to measure 10.11 and the dev-wide maximum.
 There is no complete test-set canonical check because that ground truth is
 not shipped upstream.
 
@@ -297,27 +312,18 @@ The proxy repairs address general transport and execution behavior:
   Argument mutation is not the cause of these assertions: each case builds
   fresh positions and compares the returned energy trace.
 
-The following are **host-only validation failures pending an image recheck**,
-not exclusions, skips, or expected failures. Both reproduce with ground-truth
-code and unchanged tests in one plain Python process using
-`process_hdf5_to_tuple`, so neither is specific to the proxy:
+The following are **known upstream dev-set defects**. The operator confirmed
+that reference code fails its own stored targets in the pinned
+`eval-scicode-sandbox:1.0.0` image, with `test comparison failed` for both steps.
+They also reproduce with unchanged tests in one host Python process using
+`process_hdf5_to_tuple`; these are dataset defects, not host-version issues.
+Dev problems are not published, so no exclusion from the published **65 main
+problems** is needed. All 50 dev steps still execute with their original assertions:
 
 | Step | Failing cases | Host diagnosis |
 | --- | --- | --- |
 | 78.3 | 1–3 | The timing-weighted error metric selects `dt=0.001`, returning shapes `(10001, 2)`, `(20001, 2)`, `(15001, 2)`. Targets have shapes `(2, 2)`, `(3, 2)`, `(2, 2)` and match trajectories at `dt=10`. `np.allclose` raises a broadcasting `ValueError`. |
 | 70.8 | 4 (1–3 pass) | `AssertionError`; maximum probability error about `1.7914e-4`. At `L=1.611792e22`, computed phases are of order `1e10`. A relative Hamiltonian perturbation of `1e-15` changes a probability by about `1.2502e-4`, demonstrating sensitivity to floating-point rounding. |
-
-This host uses Python 3.12.3, NumPy 2.5.2 and SciPy 1.17.1; the image pins
-NumPy 1.26.4 and SciPy 1.13.1. Neither failing step calls SciPy. The 78.3
-selection depends on measured execution time as well as numerical error;
-70.8 is numerically sensitive. These observations do **not** confirm a
-specific version regression or that the pinned image will pass. NumPy documents
-[scalar promotion changes in 2.0](https://numpy.org/doc/2.0/numpy_2_0_migration_guide.html),
-but no such dtype change was established as the cause here; the 78.3 shape
-error follows ordinary [broadcasting rules](https://numpy.org/doc/2.0/reference/generated/numpy.allclose.html).
-Downloading the pinned packages for a host comparison failed because DNS was
-unavailable. Recheck both steps through the image-backed canonical command
-above, retaining the full 50-step denominator and original assertions.
 
 ## Historical published baselines and licensing
 

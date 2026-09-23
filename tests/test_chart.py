@@ -26,6 +26,7 @@ def test_helm_chart_real_render(release):
     assert spec['nodeSelector']['cloud.google.com/gke-spot']=='true'
     assert not spec['automountServiceAccountToken']
     assert container['resources']['requests']==container['resources']['limits']
+    assert container['resources']['limits']['memory']=='4Gi'
     assert container['image']=='us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0'
     assert container['securityContext']['readOnlyRootFilesystem']
     assert 'SYS_PTRACE' in container['securityContext']['capabilities']['add']
@@ -46,6 +47,7 @@ def test_docker_target_security_and_build_paths():
     assert 'chmod 0400 /opt/scicode/test_data.h5' in text
     assert 'chown root:root' in text and 'sha256sum -c -' in text
     compose=yaml.safe_load(Path('scicode/compose.yaml').read_text())['services']['default']
+    assert compose['mem_limit']=='4g'
     assert compose['network_mode']=='none' and compose['read_only']
     assert 'eval-scicode-sandbox:1.0.0' in compose['image']
     assert 'build' not in compose  # installed wheels do not ship the large asset
@@ -63,6 +65,7 @@ def test_provider_chart_preserves_security_and_release_policy():
     container=next(c for c in workload['containers'] if c['name']=='default')
     assert container['securityContext']==service['securityContext']
     assert container['resources']['requests']==container['resources']['limits']
+    assert container['resources']['limits']['memory']=='4Gi'
     assert workload['runtimeClassName']=='gvisor'
     policy=next(x for x in docs if x['kind']=='NetworkPolicy')
     assert policy['spec']['podSelector']['matchLabels']['app.kubernetes.io/instance']=='provider-check'
