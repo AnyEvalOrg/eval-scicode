@@ -7,7 +7,7 @@ from inspect_ai.scorer import CORRECT, INCORRECT, Score, accuracy, scorer
 from inspect_ai.util import sandbox
 from .dataset import load_records
 from .execution import execution_request
-from .solver import composed_code
+from .solver import composed_code, generated_steps
 from .publication import private_grading
 from .sandbox_runner import CLEANUP_COMMAND, QUIESCENCE_COMMAND, SETUP, RUNNER
 from .receipts import verify_receipt, receipt_failure
@@ -123,7 +123,15 @@ def verify(timeout=300):
         record = records[str(state.sample_id)]
         results = []
         halted = False
-        for step in record['sub_steps']:
+        # A trajectory stopped by a limit is scored as far as it went: its missing
+        # steps fail, so the problem is INCORRECT and the run still publishes (the
+        # limit itself is recorded by Inspect). Raising here made every such run an
+        # unpublishable sample error (Prometheus 4.0, problem 77, 2026-09-25).
+        answered = generated_steps(state.messages)
+        for index, step in enumerate(record['sub_steps']):
+            if index >= answered:
+                results.append({'step':step['step_number'], 'passed':False, 'reason':'not generated'})
+                continue
             if halted:
                 results.append({'step':step['step_number'], 'passed':False, 'reason':'not run after sandbox termination'})
                 continue
