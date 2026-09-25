@@ -9,9 +9,17 @@ def extract_code(block):
     return block.replace('```python', '').replace('```', '').strip()
 
 
+def generated_steps(messages):
+    """How many steps the trajectory answered (composed_code refuses too many)."""
+    return sum(1 for m in messages if m.role == 'assistant')
+
+
 def composed_code(record, messages, step):
     codes = [extract_code(m.text) for m in messages if m.role == 'assistant']
-    if len(codes) != len(record['sub_steps']):
+    needed = int(step['step_number'].split('.')[1])
+    # A run stopped early (a token or time limit) has fewer replies than steps.
+    # Only a step whose reply and every earlier reply exist can be composed.
+    if len(codes) > len(record['sub_steps']) or len(codes) < needed:
         raise RuntimeError('Incomplete generation; details withheld.')
     return '\n'.join([record['required_dependencies'],
                       'from test_util import are_dicts_close, cmp_tuple_or_list',

@@ -123,8 +123,11 @@ def test_upstream_slater_classes(tmp_path, step_id):
     record, step = packaged(step_id)
     # These are test-split steps: no ground truth is packaged. Independently
     # implement exp(-alpha*(r1+r2)) and use the real canonical HDF5 targets.
+    target_path = Path('scicode/test_data.h5')
+    if not target_path.exists():
+        pytest.skip('Canonical HDF5 targets not available locally')
     from scicode import process_data
-    process_data.H5PY_FILE = str(Path('scicode/test_data.h5').resolve())
+    process_data.H5PY_FILE = str(target_path.resolve())
     targets = process_data.process_hdf5_to_tuple(step_id, len(step['test_cases']))
     assert run_signed(tmp_path, SLATER_REFERENCE, step['test_cases'], targets,
                       dependencies=record['required_dependencies'])['verdicts'] == [True]*3

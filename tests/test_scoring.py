@@ -99,6 +99,66 @@ def test_main_problem_requires_all_steps(monkeypatch,results,value,fraction):
     assert score.answer is None
 
 
+def _three_steps(monkeypatch):
+    record={'problem_id':'fixture','required_dependencies':'','sub_steps':[
+        {'step_number':f'1.{i+1}','test_cases':['assert 1 == target']} for i in range(3)]}
+    monkeypatch.setattr(scoring,'load_records',lambda *a:[record])
+    monkeypatch.setattr(scoring,'sandbox',lambda:object())
+    return record
+
+
+@pytest.mark.parametrize('replies', [2, 0])
+def test_a_trajectory_stopped_by_the_token_limit_is_scored_as_far_as_it_went(monkeypatch, replies):
+    # Prometheus 4.0 hit the token budget before its last reply; the scorer raised and
+    # the run could not publish at all (2026-09-25). Answered steps still run their
+    # tests; unanswered ones fail as not generated, so the problem is INCORRECT.
+    _three_steps(monkeypatch)
+    run=AsyncMock(return_value=scoring.StepResult(True,'all tests passed'))
+    monkeypatch.setattr(scoring,'run_payload',run)
+    state=SimpleNamespace(sample_id='fixture',messages=[ChatMessageAssistant(content='pass')]*replies,
+                          token_limit=256000, token_usage=256267)
+    score=asyncio.run(scoring.verify()(state,Target('')))
+    explanation=json.loads(score.explanation)
+    assert score.value==INCORRECT and run.await_count==replies
+    assert [s['reason'] for s in explanation['steps']]==(
+        ['all tests passed']*replies + ['not generated']*(3-replies))
+    assert explanation['subproblems_passed']==replies and explanation['subproblems_total']==3
+
+
+@pytest.mark.parametrize('replies', [2, 0])
+@pytest.mark.parametrize('limit,usage', [
+    (None, None),          # no limit at all
+    (256000, 120000),      # a limit, not reached: short for some other reason
+    (256000, 256000),      # at the limit is not over it (Inspect raises on total > limit)
+    (True, 5),             # a bool is not a limit
+])
+def test_a_short_trajectory_without_a_token_limit_stop_is_still_refused(monkeypatch, replies, limit, usage):
+    _three_steps(monkeypatch)
+    run=AsyncMock(return_value=scoring.StepResult(True,'all tests passed'))
+    monkeypatch.setattr(scoring,'run_payload',run)
+    state=SimpleNamespace(sample_id='fixture',messages=[ChatMessageAssistant(content='pass')]*replies,
+                          token_limit=limit, token_usage=usage)
+    with pytest.raises(RuntimeError, match='details withheld'):
+        asyncio.run(scoring.verify()(state,Target('')))
+    assert run.await_count==0
+
+
+def test_a_complete_trajectory_needs_no_limit_evidence(monkeypatch):
+    _three_steps(monkeypatch)
+    monkeypatch.setattr(scoring,'run_payload',AsyncMock(return_value=scoring.StepResult(True,'ok')))
+    state=SimpleNamespace(sample_id='fixture',messages=[ChatMessageAssistant(content='pass')]*3)
+    assert asyncio.run(scoring.verify()(state,Target(''))).value==CORRECT
+
+
+def test_more_replies_than_steps_is_still_refused(monkeypatch):
+    # An extra reply (a scaffold appending a critique turn) is not a SciCode trajectory.
+    _three_steps(monkeypatch)
+    monkeypatch.setattr(scoring,'run_payload',AsyncMock(return_value=scoring.StepResult(True,'ok')))
+    state=SimpleNamespace(sample_id='fixture',messages=[ChatMessageAssistant(content='pass')]*4)
+    with pytest.raises(RuntimeError, match='details withheld'):
+        asyncio.run(scoring.verify()(state,Target('')))
+
+
 def test_dead_or_unclean_sandbox_is_not_reused(monkeypatch):
     record={'problem_id':'fixture','required_dependencies':'','sub_steps':[
         {'step_number':f'1.{i+1}','test_cases':['assert 1 == target']} for i in range(3)]}

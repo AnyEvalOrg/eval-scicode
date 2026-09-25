@@ -7,7 +7,7 @@ from inspect_ai.scorer import CORRECT, INCORRECT, Score, accuracy, scorer
 from inspect_ai.util import sandbox
 from .dataset import load_records
 from .execution import execution_request
-from .solver import composed_code
+from .solver import composed_code, generated_steps
 from .publication import private_grading
 from .sandbox_runner import CLEANUP_COMMAND, QUIESCENCE_COMMAND, SETUP, RUNNER
 from .receipts import verify_receipt, receipt_failure
@@ -115,6 +115,19 @@ async def run_payload(env, payload):
         return StepResult(False, 'candidate left processes that could not be cleaned up', True)
     return StepResult(True, 'all tests passed')
 
+def stopped_by_token_limit(state):
+    """Inspect's own evidence that the sample's token limit stopped generation.
+
+    Inspect raises when cumulative usage exceeds the limit (``total > limit``) and
+    then scores the state it had; the same comparison here is the only trusted
+    signal the scorer sees. Time, message and operator stops stay refused.
+    """
+    limit = getattr(state, 'token_limit', None)
+    usage = getattr(state, 'token_usage', None)
+    return (isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+            and isinstance(usage, int) and not isinstance(usage, bool) and usage > limit)
+
+
 @scorer(metrics=[accuracy()])
 def verify(timeout=300):
     records = {r['problem_id']: r for r in load_records(True)}
@@ -123,7 +136,18 @@ def verify(timeout=300):
         record = records[str(state.sample_id)]
         results = []
         halted = False
-        for step in record['sub_steps']:
+        # A trajectory stopped by a limit is scored as far as it went: its missing
+        # steps fail, so the problem is INCORRECT and the run still publishes (the
+        # limit itself is recorded by Inspect). Raising here made every such run an
+        # unpublishable sample error (Prometheus 4.0, problem 77, 2026-09-25).
+        answered = generated_steps(state.messages)
+        if answered < len(record['sub_steps']) and not stopped_by_token_limit(state):
+            # Short for any other reason is a broken trajectory, not a model failure.
+            raise RuntimeError('Incomplete generation; details withheld.')
+        for index, step in enumerate(record['sub_steps']):
+            if index >= answered:
+                results.append({'step':step['step_number'], 'passed':False, 'reason':'not generated'})
+                continue
             if halted:
                 results.append({'step':step['step_number'], 'passed':False, 'reason':'not run after sandbox termination'})
                 continue
