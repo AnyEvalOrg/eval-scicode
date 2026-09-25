@@ -115,6 +115,19 @@ async def run_payload(env, payload):
         return StepResult(False, 'candidate left processes that could not be cleaned up', True)
     return StepResult(True, 'all tests passed')
 
+def stopped_by_token_limit(state):
+    """Inspect's own evidence that the sample's token limit stopped generation.
+
+    Inspect raises when cumulative usage exceeds the limit (``total > limit``) and
+    then scores the state it had; the same comparison here is the only trusted
+    signal the scorer sees. Time, message and operator stops stay refused.
+    """
+    limit = getattr(state, 'token_limit', None)
+    usage = getattr(state, 'token_usage', None)
+    return (isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+            and isinstance(usage, int) and not isinstance(usage, bool) and usage > limit)
+
+
 @scorer(metrics=[accuracy()])
 def verify(timeout=300):
     records = {r['problem_id']: r for r in load_records(True)}
@@ -128,6 +141,9 @@ def verify(timeout=300):
         # limit itself is recorded by Inspect). Raising here made every such run an
         # unpublishable sample error (Prometheus 4.0, problem 77, 2026-09-25).
         answered = generated_steps(state.messages)
+        if answered < len(record['sub_steps']) and not stopped_by_token_limit(state):
+            # Short for any other reason is a broken trajectory, not a model failure.
+            raise RuntimeError('Incomplete generation; details withheld.')
         for index, step in enumerate(record['sub_steps']):
             if index >= answered:
                 results.append({'step':step['step_number'], 'passed':False, 'reason':'not generated'})
