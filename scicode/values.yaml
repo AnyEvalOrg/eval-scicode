@@ -47,7 +47,7 @@ services:
       - name: shm
         mountPath: /dev/shm
         readOnly: true
-    # Guaranteed QoS: 4096 MiB candidate RSS + 768 MiB executor address space
+    # Guaranteed QoS: 4096 MiB candidate RSS + 1280 MiB executor address space
     # + 256 MiB directory-visible/descriptor-retained bytes leaves 512 MiB
     # for polling/scan bursts and supervisor/runtime overhead within 6 GiB.
     # Memory-backed filesystem space is read-only; descriptor-retained memfds

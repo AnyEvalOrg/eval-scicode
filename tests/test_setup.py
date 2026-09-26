@@ -176,7 +176,7 @@ def test_comparison_worker_prerequisites_enforce_hard_limits_before_work(monkeyp
     monkeypatch.setattr(worker.ctypes, 'CDLL', lambda *a: SimpleNamespace(prctl=lambda *a: 0))
     worker.prerequisites()
     assert events == [
-        (worker.resource.RLIMIT_AS, (768 * 1024**2, 768 * 1024**2)),
+        (worker.resource.RLIMIT_AS, (1280 * 1024**2, 1280 * 1024**2)),
         (worker.resource.RLIMIT_CPU, (300, 300)),
         (worker.resource.RLIMIT_NOFILE, (64, 64)),
         (worker.resource.RLIMIT_CORE, (0, 0)),

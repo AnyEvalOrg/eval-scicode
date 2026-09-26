@@ -9,7 +9,7 @@ steps:
           --cap-add DAC_OVERRIDE --cap-add SYS_PTRACE --security-opt no-new-privileges \
           --mount type=volume,destination=/tmp --tmpfs /dev/shm:ro,size=16m \
           -v /workspace:/workspace -w /workspace '${_SANDBOX_IMAGE}' \
-          python3 scripts/canonical_check.py --variant verified --image '${_SANDBOX_IMAGE}' --peak-rss
+          python3 scripts/canonical_check.py --variant verified --image '${_SANDBOX_IMAGE}' --peak-rss --replays
 substitutions:
   _SANDBOX_IMAGE: us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.0.0
 timeout: 21600s

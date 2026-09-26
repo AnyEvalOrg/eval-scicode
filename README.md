@@ -120,7 +120,8 @@ Other deliberate changes from supplied Inspect:
   Expensive symbolic numbers, decoding failures and comparison failures cannot
   consume the signing supervisor’s execution budget.
   Candidate pickle is never deserialized. BLAS uses one thread.
-* A 32 MiB aggregate result/output limit, template resource limits and the
+* A 256 MiB per-test candidate reply budget, a 32 MiB stdout/stderr/file output
+  limit, template resource limits and the
   security isolation below bound evaluation. These limits and the pinned
   Python/numeric environment can affect unusually large or slow solutions.
 
@@ -152,7 +153,7 @@ code, or candidate output descriptors. Its only extra descriptors are the two
 RPC pipe endpoints; the candidate cannot access the executor's verdict stream.
 Targets are opened by that executor after exec.
 
-The executor has hard **768 MiB RLIMIT_AS**, **300 seconds RLIMIT_CPU**,
+The executor has hard **1280 MiB RLIMIT_AS**, **300 seconds RLIMIT_CPU**,
 **64 RLIMIT_NOFILE**, no core dumps, and a supervisor-enforced wall deadline
 covering the whole step (300 seconds by default). A seccomp filter denies socket
 and network syscalls in addition to container/pod network isolation. JSON,
@@ -167,19 +168,23 @@ aggregate candidate RSS at 4 GiB. A 100 ms disk watchdog bounds `/tmp`,
 `/var/tmp`, `/dev/shm` and descriptor-retained files/memfds at 256 MiB / 10,000
 entries, deduplicated by inode. Root has SYS_PTRACE for cross-UID descriptor
 accounting; the irreversible child credential drop clears capabilities.
-The 6 GiB pod budget allocates 4096 MiB to candidate RSS, up to 768 MiB to
+The 6 GiB pod budget allocates 4096 MiB to candidate RSS, up to 1280 MiB to
 the executor address space, and 256 MiB to watched files, leaving 512 MiB
-for the supervisor, runtime overhead and sampling bursts. Per-process 5 GiB
+for the supervisor, runtime overhead and sampling bursts (4096 + 1280 + 256 +
+512 = 6144 MiB; package 1.0.0 had 768 MiB here and left 512 MiB unassigned). Per-process 5 GiB
 AS/DATA limits allow virtual mappings above the aggregate resident-memory cap.
 Sampling cannot enumerate all kernel memory allocations; pod attribution is
-the backstop. Pipe replies have bounded length-prefixed frames and a 32 MiB
-aggregate receive budget per trusted test (and separately for initialization
-and binding setup). Only the trusted test loop resets that budget; the step's
+the backstop. Pipe replies have length-prefixed frames below 256 MiB and a
+256 MiB aggregate receive budget per trusted test (and separately for
+initialization and binding setup); a frame header over the remaining budget is
+refused before any allocation, and each frame is read into one buffer of its
+checked size. Only the trusted test loop resets that budget; the step's
 wall/CPU deadlines remain unchanged. A rejected frame permanently invalidates
 the channel. Malformed, oversized and unsupported results fail
 closed; result files are no longer used.
 Receipts contain only statuses, per-test booleans, a working-directory ID and,
-when requested by the canonical check, a numeric peak candidate RSS in bytes.
+when requested by the canonical check, a numeric peak candidate RSS and the
+executor's peak virtual size (VmPeak) in bytes.
 No code, candidate streams, targets or answer bytes enter explanations/logs.
 
 An authenticated failure is **INCORRECT**. After successful SETUP, missing or
@@ -400,18 +405,37 @@ so published SciCode-Verified numbers are calibration context, not same-harness 
   NumPy 1.26 `linalg` rejects (steps 65.5/65.6; such solutions fail here) and one
   undiagnosed step (60.5).
 
-**Known harness limit (both tasks).** A candidate result crosses the proxy boundary within
-the per-test 32 MiB reply budget. For the cases below, a correct result is larger than
-that budget, so a correct solution is signed incorrect: **13.14 case 3, 53.4 case 3,
-63.2 case 2, 63.4 case 2 and 63.5 cases 1–3**. The tests and targets are the same in
-`scicode/scicode`, so problems 13, 53 and 63 cannot currently be passed in either task.
-`tests/test_verified.py` pins the list.
+**Reply budget (package 1.1.0, both tasks).** Package 1.0.0 capped candidate replies at
+32 MiB per trusted test and the executor at 768 MiB, so correct answers to **13.14 case 3,
+53.4 case 3, 63.2 case 2, 63.4 case 2 and 63.5 cases 1–3** were signed incorrect and
+problems 13, 53 and 63 could not be passed in `scicode/scicode` (the same tests and
+targets are in `scicode/scicode_verified`). The budget is now set from measurement:
+
+* Every stored target in both populations was encoded with dtypes widened to 64 bits.
+  Outside problems 13.14, 53.4 and 63.2–63.5 the largest is 32,000,570 bytes (13.1).
+* `scripts/reply_replays.py` replays those six steps (every case) through the real
+  two-process executor with a straightforward correct call pattern (true intermediate
+  shapes; `forward_iteration` mutates and returns its argument). Largest frame
+  **170,683,855 bytes** and largest per-test total **170,786,610 bytes** (both 63.2 case 2,
+  162.8/162.9 MiB); 63.4 case 2 sends three frames totalling 122.3 MiB.
+* Frame limit (`safe_serialization.MAX_BYTES`) and per-test reply budget
+  (`execution.REPLY_LIMIT`, now a separate `reply_limit` request field) are **256 MiB**:
+  1.57x the measurement. Candidate stdout/stderr/file size stay at 32 MiB.
+* In-image executor peak virtual size (Cloud Build `a086bc72`, provisional 2 GiB cap):
+  **996.5 MiB** for 63.2 case 2 (the largest; 13.14/53.4/63.3/63.4/63.5 need 441–733 MiB),
+  309 MiB for any dev reference step. The cap is **1280 MiB** (1.28x), which exactly uses
+  the 512 MiB the 1.0.0 pod budget left unassigned; candidate RSS stays 4 GiB.
+* Security properties are unchanged: frames and per-test totals remain bounded and
+  refused before allocation; an executor that runs out of address space crashes into a
+  signed INCORRECT; the signing supervisor never reads frames.
+
+This changes `scicode/scicode` behaviour: both images carry the new executor code.
 
 **Checks.** SciCode-Verified ships no test-set reference solutions, so no test step can be
 run with a reference solution. `scripts/cloudbuild-canonical-verified.yaml` runs
 `canonical_check.py --variant verified` in the verified image: the 50 dev reference steps
 (bound to the image's marker), then target loading for all 286 tested verified steps under
-the executor's 768 MiB address-space limit. The release also patched dev step 1.1
+the executor's address-space limit. The release also patched dev step 1.1
 (`targets/1.json`, outside its population): the unchanged dev reference reproduces the
 original values for cases 2–3, not the patched ones, so the verified-variant check reports
 1.1 as `known_verified_dev_target_change` (cases 2 and 3 exactly). Cloud Build `6d331447-5379-4cae-83a7-da523bda09c7` on the digest-pinned image (2026-09-26): **47 passed, 2 known upstream defects (78.3, 70.8), 1 known verified dev target change (1.1), 0 unexpected failures; targets loaded for 286/286 tested verified steps**; peak candidate RSS 2,443,464,704 bytes.

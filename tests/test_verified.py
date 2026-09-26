@@ -174,9 +174,10 @@ def test_scorer_binds_verified_targets_and_uses_verified_tests(monkeypatch, vari
         assert ('targets_sha256' in request) is (variant == 'verified')
 
 
-def test_default_request_shape_is_unchanged():
+def test_default_request_shape_has_no_target_digest():
     step = load_records()[0]['sub_steps'][0]
-    assert set(execution_request('x', step)) == {'code', 'step_id', 'tests', 'dependencies', 'timeout', 'output_limit'}
+    assert set(execution_request('x', step)) == {'code', 'step_id', 'tests', 'dependencies', 'timeout',
+                                                 'output_limit', 'reply_limit'}
     assert execution_request('x', step, targets_sha256='ab')['targets_sha256'] == 'ab'
 
 
@@ -346,12 +347,6 @@ REPLAYS = {
 }
 
 
-# One-based cases whose correct result cannot cross the proxy boundary: the per-test 32 MiB
-# reply budget (safe_serialization.MAX_BYTES) is smaller than the result itself. These are
-# shared with scicode/scicode (same tests and targets there) and are documented in README.md.
-REPLY_BUDGET_CASES = {'13.14': [3], '53.4': [3], '63.2': [2], '63.4': [2], '63.5': [1, 2, 3]}
-
-
 @pytest.mark.parametrize('step_id', sorted(REPLAYS, key=lambda s: tuple(map(int, s.split('.')))))
 def test_corrected_test_constructs_pass_exact_replays(tmp_path, step_id):
     if not CLEANED_H5.exists():
@@ -362,8 +357,7 @@ def test_corrected_test_constructs_pass_exact_replays(tmp_path, step_id):
     step = next(s for s in record['sub_steps'] if s['step_number'] == step_id)
     process_data.H5PY_FILE = str(CLEANED_H5)
     targets = process_data.process_hdf5_to_tuple(step_id, len(step['test_cases']))
-    keep = [i for i in range(len(targets)) if i + 1 not in REPLY_BUDGET_CASES.get(step_id, [])]
-    tests, targets = [step['test_cases'][i] for i in keep], [targets[i] for i in keep]
+    tests = step['test_cases']
     replay = tmp_path / 'replay.pickle'
     replay.write_bytes(pickle.dumps(targets))
     code = '\n'.join([record['required_dependencies'], 'import pickle as _pickle',
@@ -373,37 +367,3 @@ def test_corrected_test_constructs_pass_exact_replays(tmp_path, step_id):
                         dependencies=record['required_dependencies'], timeout=300)
     failed = [i for i, passed in enumerate(result['verdicts'], 1) if not passed]
     assert receipt_failure(result) is None, f'{step_id}: failed cases {failed}; receipt={result}'
-
-
-@pytest.mark.parametrize('variant', ['scicode', 'verified'])
-def test_known_reply_budget_cases_exceed_the_frame_limit(variant):
-    """Pins the documented limitation so a budget change must update README.md."""
-    h5 = CLEANED_H5 if variant == 'verified' else Path('scicode/test_data.h5')
-    if not h5.exists():
-        pytest.skip('HDF5 targets not available locally')
-    from scicode import process_data
-    from scicode.safe_serialization import dumps
-    records = load_verified_records() if variant == 'verified' else load_records()
-    steps = {s['step_number']: s for s in steps_of(records)}
-    process_data.H5PY_FILE = str(h5)
-    for step_id, cases in REPLY_BUDGET_CASES.items():
-        targets = process_data.process_hdf5_to_tuple(step_id, len(steps[step_id]['test_cases']))
-        for case in cases:
-            with pytest.raises(ValueError, match='Result too large'):
-                dumps(targets[case - 1])
-
-
-@pytest.mark.parametrize('code,source', [
-    # 63.5: price_option returns a 2000 x 2000 float grid (all three cases).
-    ('import numpy as np\ndef price_option():\n    return np.ones((2000, 2000))',
-     'assert price_option().shape == (2000, 2000)'),
-    # 13.14 case 3: seven 100^3 field attributes read in one test.
-    ('import numpy as np\nclass Maxwell:\n    def __init__(self):\n'
-     '        for name in "abcdefg":\n            setattr(self, name, np.ones((100, 100, 100)))\n'
-     'def initialize():\n    return Maxwell()',
-     'm = initialize()\nassert all(getattr(m, name).shape == (100, 100, 100) for name in "abcdefg")'),
-])
-def test_results_larger_than_the_reply_budget_are_signed_incorrect(tmp_path, code, source):
-    from proxy_harness import run_signed
-    result = run_signed(tmp_path, code, [source], [None], timeout=120)
-    assert result['verdicts'] == [False] and receipt_failure(result) == 'test comparison failed'

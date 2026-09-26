@@ -511,9 +511,14 @@ def run_proxy_tests(candidate_work):
             status["returncode"] = result
             if result == 0:
                 results.seek(0)
-                bits = results.read(len(verdicts) + 1)
-                if len(bits) == len(verdicts) and all(bit in (0, 1) for bit in bits):
-                    verdicts = [bool(bit) for bit in bits]
+                # A measuring executor appends its 8-byte peak virtual size.
+                extra = 8 if "peak_candidate_rss_bytes" in status else 0
+                bits = results.read(len(verdicts) + extra + 1)
+                if (len(bits) == len(verdicts) + extra
+                        and all(bit in (0, 1) for bit in bits[:len(verdicts)])):
+                    if extra:
+                        status["peak_executor_vm_bytes"] = int.from_bytes(bits[len(verdicts):], "big")
+                    verdicts = [bool(bit) for bit in bits[:len(verdicts)]]
         except subprocess.TimeoutExpired:
             status["timeout"] = True
         except Exception:

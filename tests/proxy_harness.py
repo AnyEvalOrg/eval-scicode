@@ -25,13 +25,21 @@ from scicode.safe_serialization import dumps
 
 
 def run_signed(tmp_path, code, tests, targets, dependencies='import numpy as np', timeout=10,
-               output_limit=32*1024*1024, fault=None):
+               output_limit=32*1024*1024, fault=None, reply_limit=None, trace=None, address_space=None,
+               measure=False):
     work = tmp_path / 'scicode-fixture'
     work.mkdir()
     package = str(Path('scicode').resolve())
     paths = [package, str(Path('.build/test-deps').resolve()), *sys.path]
     request = execution_request(code, {'step_number': 'fixture.1', 'test_cases': tests}, timeout, dependencies)
     request['output_limit'] = output_limit
+    if measure:
+        request['measure_peak_rss'] = True
+    if reply_limit is not None:
+        request['reply_limit'] = reply_limit
+    elif output_limit != 32*1024*1024:
+        # Small-budget fixtures bound candidate replies with the same number.
+        request['reply_limit'] = output_limit
     # Targets belong to the trusted fixture, not argv or one aggregate RPC
     # frame. Large reference sets can exceed both ARG_MAX and MAX_BYTES.
     target_files = []
@@ -62,10 +70,29 @@ def run_signed(tmp_path, code, tests, targets, dependencies='import numpy as np'
         wrapper = ('import sys,resource;sys.path[:0]=' + repr(paths) + ';sys.argv=' + repr(actual_args) + ';'
                    'import ' + worker + ' as worker;')
         if worker == 'comparison_worker':
+            limits = 'resource.setrlimit(resource.RLIMIT_CPU,' + repr((2, 2) if fault and 'while True' in fault[2] else (300, 300)) + ')'
+            if address_space is not None:
+                # Linux only (macOS ignores RLIMIT_AS): the executor's real address-space cap.
+                limits = '(' + limits + ',resource.setrlimit(resource.RLIMIT_AS,' + repr((address_space, address_space)) + '))'
             wrapper += ('import types;from pathlib import Path;from safe_serialization import loads;'
-                        'worker.prerequisites=lambda:resource.setrlimit(resource.RLIMIT_CPU,' + repr((2, 2) if fault and 'while True' in fault[2] else (300, 300)) + ');'
+                        'worker.prerequisites=lambda:' + limits + ';'
                         'worker.trusted_paths=lambda:None;worker.deny_network=lambda:None;'
                         'sys.modules["process_data"]=types.SimpleNamespace(process_hdf5_to_tuple=lambda *a:[loads(Path(p).read_bytes()) for p in ' + repr(target_files) + ']);')
+            if trace:
+                # Record every executor-received frame size, test boundaries and peak memory.
+                wrapper += ('import proxy_protocol,atexit,json as _j;_tr=[];_rv=proxy_protocol.Channel._read;'
+                            '_bt=proxy_protocol.Channel.begin_test;'
+                            'proxy_protocol.Channel.begin_test=lambda self:(_tr.append(["test"]),_bt(self))[1];'
+                            'proxy_protocol.Channel._read=lambda self,n:(_tr.append(["frame",n]) if n!=8 else None,_rv(self,n))[1];'
+                            'import os as _os\n'
+                            'def _dump():\n'
+                            '    peak=None\n'
+                            '    try:\n'
+                            '        peak={k:int(v.split()[0])*1024 for k,v in (l.split(":",1) for l in open("/proc/self/status")) if k in ("VmPeak","VmHWM")}\n'
+                            '    except OSError:\n'
+                            '        pass\n'
+                            '    _j.dump({"events":_tr,"maxrss":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,"proc":peak},open(' + repr(str(trace)) + ',"w"))\n'
+                            'atexit.register(_dump);')
             if fault:
                 module, name, body = fault
                 wrapper += 'import ' + module + ';exec(' + repr('def fail(*args, **kwargs):\n    ' + body + '\n' + module + '.' + name + '=fail') + ');'

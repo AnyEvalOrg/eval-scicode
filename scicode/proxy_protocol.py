@@ -18,7 +18,8 @@ class Channel:
     def __init__(self, read_fd, write_fd, timeout, limit=MAX_BYTES):
         self.read_fd, self.write_fd = read_fd, write_fd
         self.deadline = time.monotonic() + timeout
-        self.limit = min(limit, MAX_BYTES)
+        # Per-test aggregate reply budget; each frame is separately below MAX_BYTES.
+        self.limit = limit
         self.remaining = self.limit
         self.broken = False
 
@@ -49,14 +50,21 @@ class Channel:
             data = data[count:]
 
     def _read(self, count):
-        chunks = bytearray()
-        while len(chunks) < count:
-            self._wait(self.read_fd)
-            chunk = os.read(self.read_fd, min(65536, count - len(chunks)))
-            if not chunk:
-                raise FailedCall('Candidate disconnected')
-            chunks.extend(chunk)
-        return bytes(chunks)
+        # Read in place: one buffer of the (already budget-checked) frame size,
+        # instead of a growing buffer plus a full copy (halves peak memory).
+        buffer = bytearray(count)
+        view = memoryview(buffer)
+        received = 0
+        try:
+            while received < count:
+                self._wait(self.read_fd)
+                size = os.readv(self.read_fd, [view[received:received + 65536]])
+                if not size:
+                    raise FailedCall('Candidate disconnected')
+                received += size
+        finally:
+            view.release()
+        return buffer
 
     def receive(self):
         if self.broken:
