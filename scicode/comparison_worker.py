@@ -12,7 +12,9 @@ import stat
 import sys
 import sysconfig
 
-ADDRESS_SPACE = 768 * 1024**2
+# Measured in-image VmPeak: 996.5 MiB for the largest reply (63.2 case 2), 309 MiB for
+# every dev reference step. 1280 MiB (1.28x) fits the 6 GiB pod budget in values.yaml.
+ADDRESS_SPACE = 1280 * 1024**2
 CPU_SECONDS = 300
 
 
@@ -130,6 +132,17 @@ def execute_tests(request, targets, client):
     return verdicts
 
 
+def peak_virtual_bytes():
+    try:
+        with open('/proc/self/status', encoding='ascii') as stream:
+            for line in stream:
+                if line.startswith('VmPeak:'):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
 def main():
     prerequisites()
     trusted_paths()
@@ -143,7 +156,7 @@ def main():
         request = json.load(stream)
     process_data.H5PY_FILE = '/opt/scicode/test_data.h5'
     targets = process_data.process_hdf5_to_tuple(request['step_id'], len(request['tests']))
-    channel = Channel(int(sys.argv[2]), int(sys.argv[3]), request['timeout'], request['output_limit'])
+    channel = Channel(int(sys.argv[2]), int(sys.argv[3]), request['timeout'], request['reply_limit'])
     ready = channel.receive()
     if type(ready) is not tuple or len(ready) != 3 or ready[0] is not True:
         raise RuntimeError('Candidate initialization failed')
@@ -158,7 +171,12 @@ def main():
     client.bindings = bindings
     verdicts = execute_tests(request, targets, client)
     # Publish only after all tests finish. Crash/MemoryError leaves no successes.
-    sys.stdout.buffer.write(bytes(verdicts))
+    output = bytes(verdicts)
+    if request.get('measure_peak_rss') is True:
+        # Operator measurement only: the executor's peak virtual size (VmPeak), which
+        # RLIMIT_AS bounds, as 8 big-endian bytes after the verdicts.
+        output += peak_virtual_bytes().to_bytes(8, 'big')
+    sys.stdout.buffer.write(output)
 
 
 if __name__ == '__main__':

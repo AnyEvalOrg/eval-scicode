@@ -8,7 +8,9 @@ import numpy as np
 import scipy.sparse
 import sympy
 
-MAX_BYTES = 32 * 1024 * 1024
+# One frame. Measured largest correct reply in both populations: 170,683,855 bytes
+# (63.2 case 2, scripts/reply_replays.py); 256 MiB leaves 1.57x headroom.
+MAX_BYTES = 256 * 1024 * 1024
 MAX_NODES = 100000
 
 

@@ -138,7 +138,7 @@ def check_prerequisites(work):
             shutil.rmtree(probe)
 
 
-def check_test_data():
+def check_test_data(expected=None):
     import stat
     target_info = os.stat("/opt/scicode/test_data.h5", follow_symlinks=False)
     if not stat.S_ISREG(target_info.st_mode) or target_info.st_uid != 0 or stat.S_IMODE(target_info.st_mode) != 0o400:
@@ -146,12 +146,31 @@ def check_test_data():
     with open("/opt/scicode/test_data.h5", "rb") as target_stream:
         if target_stream.read(8) != b"\x89HDF\r\n\x1a\n":
             raise RuntimeError()
+    # Images built after SciCode-Verified carry a root-owned marker naming the
+    # SHA-256 their build verified. A marker and a requested digest must agree;
+    # either one without the other means a task/image mismatch. The original
+    # eval-scicode-sandbox image has no marker and scicode/scicode sends none.
+    try:
+        marker_info = os.stat("/opt/scicode/test_data.sha256", follow_symlinks=False)
+    except FileNotFoundError:
+        marker_info = None
+    if marker_info is None:
+        if expected is not None:
+            raise RuntimeError()
+        return
+    if (not stat.S_ISREG(marker_info.st_mode) or marker_info.st_uid != 0
+            or stat.S_IMODE(marker_info.st_mode) & 0o022):
+        raise RuntimeError()
+    with open("/opt/scicode/test_data.sha256", "rb") as marker_stream:
+        recorded = marker_stream.read(66)
+    if type(expected) is not str or recorded != (expected + "\n").encode():
+        raise RuntimeError()
 
 try:
     request = json.load(sys.stdin)
     work = tempfile.mkdtemp(prefix="scicode-", dir="/tmp")
     check_prerequisites(work)
-    check_test_data()
+    check_test_data(request.get("targets_sha256"))
     # Exercise the real worker limits and imports before candidate activity.
     subprocess.run(
         [sys.executable, "-I", "-S", "/opt/scicode/runtime/comparison_worker.py", "--probe"],
@@ -492,9 +511,14 @@ def run_proxy_tests(candidate_work):
             status["returncode"] = result
             if result == 0:
                 results.seek(0)
-                bits = results.read(len(verdicts) + 1)
-                if len(bits) == len(verdicts) and all(bit in (0, 1) for bit in bits):
-                    verdicts = [bool(bit) for bit in bits]
+                # A measuring executor appends its 8-byte peak virtual size.
+                extra = 8 if "peak_candidate_rss_bytes" in status else 0
+                bits = results.read(len(verdicts) + extra + 1)
+                if (len(bits) == len(verdicts) + extra
+                        and all(bit in (0, 1) for bit in bits[:len(verdicts)])):
+                    if extra:
+                        status["peak_executor_vm_bytes"] = int.from_bytes(bits[len(verdicts):], "big")
+                    verdicts = [bool(bit) for bit in bits[:len(verdicts)]]
         except subprocess.TimeoutExpired:
             status["timeout"] = True
         except Exception:

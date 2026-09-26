@@ -49,14 +49,24 @@ def main() -> None:
     assert len(extended.dataset) == 80
     from importlib.resources import files
     from importlib.metadata import version
-    assert version('eval-scicode') == '1.0.0'
+    assert version('eval-scicode') == '1.1.0'
+    verified = registry_create("task", "scicode/scicode_verified", sandbox_type="docker")
+    from scicode.dataset import verified_manifest
+    assert [sample.id for sample in verified.dataset] == verified_manifest()["task_ids"]
+    assert len(verified.dataset) == 64 and verified.epochs == 1
+    assert Path(verified.sandbox.config).name == 'compose-verified.yaml'
+    assert Path(verified.sandbox.config).is_relative_to(installed)
+    assert Path(registry_create("task", "scicode/scicode_verified").sandbox.config.values).name == 'values-verified.yaml'
     for asset in ('Dockerfile', 'values.yaml', 'compose.yaml', 'chart/Chart.yaml',
-                  'docker-requirements.txt', 'data/problems_all.jsonl.gz', 'data/problems_dev.jsonl.gz', 'chart/templates/pod.yaml', 'chart/templates/network-policy.yaml'):
+                  'docker-requirements.txt', 'data/problems_all.jsonl.gz', 'data/problems_dev.jsonl.gz', 'chart/templates/pod.yaml', 'chart/templates/network-policy.yaml',
+                  'verified.Dockerfile', 'values-verified.yaml', 'compose-verified.yaml',
+                  'data/problems_verified_test.jsonl.gz', 'data/verified_manifest.json'):
         assert files('scicode').joinpath(asset).is_file()
     assert not files('scicode').joinpath('test_data.h5').is_file()
+    assert not files('scicode').joinpath('test_data_cleaned.h5').is_file()
     default = registry_create("task", "scicode/scicode")
     assert Path(default.sandbox.config.chart).is_relative_to(installed)
-    print("Cold installed-wheel discovery: PASS; 1 task x 65 test ids, 80 with dev; network blocked; no checkout imports.")
+    print("Cold installed-wheel discovery: PASS; scicode 65 test ids (80 with dev), scicode_verified 64; network blocked; no checkout imports.")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ def test_helm_chart_real_render(release):
     assert not spec['automountServiceAccountToken']
     assert container['resources']['requests']==container['resources']['limits']
     assert container['resources']['limits']['memory']=='6Gi'
-    assert container['image']=='us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0'
+    assert container['image']=='us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.1.0'
     assert container['securityContext']['readOnlyRootFilesystem']
     assert 'SYS_PTRACE' in container['securityContext']['capabilities']['add']
 
@@ -37,8 +37,8 @@ def test_task_and_catalog():
     assert len(scicode(include_dev_set=True,sandbox_type='docker').dataset)==80
     assert scicode(sandbox_type='docker').config.temperature is None
     catalog=json.loads(Path('anyeval.json').read_text())
-    assert catalog['tasks']==[{'name':'scicode','samples':65}]
-    assert catalog['total_samples']==65
+    assert catalog['tasks'][0]=={'name':'scicode','samples':65}
+    assert catalog['total_samples']==65+64  # scicode_verified: tests/test_verified.py
 
 
 def test_docker_target_security_and_build_paths():
@@ -49,7 +49,7 @@ def test_docker_target_security_and_build_paths():
     compose=yaml.safe_load(Path('scicode/compose.yaml').read_text())['services']['default']
     assert compose['mem_limit']=='6g'
     assert compose['network_mode']=='none' and compose['read_only']
-    assert 'eval-scicode-sandbox:1.0.0' in compose['image']
+    assert 'eval-scicode-sandbox:1.1.0' in compose['image']
     assert 'build' not in compose  # installed wheels do not ship the large asset
 
 

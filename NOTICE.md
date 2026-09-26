@@ -17,3 +17,15 @@ publication suppression, sandbox-state attribution, chart and regression tests
 are adapted from the supplied eval-cobolcodebench template (Apache-2.0), whose
 supervisor/publication/chart in turn derive from eval-cobol-javatrans. COBOL
 datasets and unrelated obsolete OpenEvalz stub content are not redistributed.
+
+SciCode-Verified (task scicode/scicode_verified): corrected test problems and grading
+targets by Sihan Hu, Lyuhan Huang, Youjin Deng and Kun Chen, "SciCode-Verified: How
+Benchmark Defects Underestimated the Scientific-Coding Ability of Language Models",
+arXiv:2608.04975. Derived from SciCode and redistributed under Apache-2.0 (the same
+license text as LICENSE, shipped as the release's LICENSE on Hugging Face and as
+eval_clean/vendor/LICENSE in the repository). scicode/data/problems_verified_test.jsonl.gz
+is the byte-preserved scicode_verified/problems_test.jsonl from
+github.com/flyingwagner/scicode-verified at ddab4a92f8d80a7113ab946628e994b52354d838
+(identical to data/problems_test.jsonl of Hugging Face dataset shhu2001/SciCode-Verified
+at eea11a866be6860725258702b39ef8651ed26abd). The eval-scicode-verified-sandbox image
+bakes that release's test_data_cleaned.h5 unchanged. Neither file is modified here.

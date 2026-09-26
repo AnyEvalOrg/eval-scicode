@@ -1,6 +1,6 @@
 services:
   default:
-    image: ${SCICODE_SANDBOX_IMAGE:-us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.1.0}
+    image: ${SCICODE_VERIFIED_SANDBOX_IMAGE:-us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.1.0}
     command: ["sleep", "infinity"]
     working_dir: /tmp
     user: "0:0"
