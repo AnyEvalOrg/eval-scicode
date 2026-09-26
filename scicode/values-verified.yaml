@@ -1,0 +1,90 @@
+# AnyEval chart default values; provider chart is an explicit exception.
+# AnyEval: set INSPECT_K8S_DEFAULT_NAMESPACE=anyeval-sandbox.
+global:
+  nameOverride: ""
+  fullnameOverride: ""
+automountServiceAccountToken: false
+serviceAccountCreate: false
+allowDomains: []
+allowEntities: []
+allowCIDR: []
+services:
+  default:
+    # Cloud Build tag matches pyproject.toml; AnyEval pins the digest in its catalog.
+    image: us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.0.0
+    command: ["sleep", "infinity"]
+    workingDir: /tmp
+    runtimeClassName: gvisor
+    nodeSelector:
+      cloud.google.com/gke-spot: "true"
+    networkIsolated: true
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      runAsNonRoot: false
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      # Shared by both charts: SYS_PTRACE satisfies PTRACE_MODE_READ when
+      # root follows another UID's /proc/pid/fd magic links for accounting.
+      # All capabilities are lost on the irreversible candidate credential drop.
+      capabilities:
+        drop: ["ALL"]
+        add: ["SETUID", "SETGID", "KILL", "CHOWN", "DAC_OVERRIDE", "SYS_PTRACE"]
+      seccompProfile:
+        type: RuntimeDefault
+    # Shared by the custom and provider charts: no writable memory filesystem.
+    volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 512Mi
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Mi
+    volumeMounts:
+      - name: tmp
+        mountPath: /tmp
+      - name: shm
+        mountPath: /dev/shm
+        readOnly: true
+    # Guaranteed QoS: 4096 MiB candidate RSS + 768 MiB executor address space
+    # + 256 MiB directory-visible/descriptor-retained bytes leaves 512 MiB
+    # for polling/scan bursts and supervisor/runtime overhead within 6 GiB.
+    # Memory-backed filesystem space is read-only; descriptor-retained memfds
+    # are charged by the fd scan.
+    # Unenumerated kernel allocations can still OOM: the scorer uses the
+    # pod's OOMKilled status as the missing-receipt attribution backstop.
+    # RSS polling: 50 ms; disk polling: 100 ms, with cancellation/byte checks
+    # every entry and a 10,000-entry cap. Candidate AS/DATA=5 GiB, NPROC=64,
+    # NOFILE=256 (1024 for Java). oom_score_adj is not a gVisor boundary.
+    # /tmp is disk-backed and executable. Its 512 MiB emptyDir sizeLimit and
+    # 1 GiB pod ephemeral-storage limit are eviction backstops; the watchdog
+    # handles common cases, including unlinked files. /var/tmp is watched too.
+    resources:
+      requests:
+        cpu: "1"
+        memory: 6Gi
+        # Includes candidate files, runtime and log overhead.
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "1"
+        memory: 6Gi
+        ephemeral-storage: 1Gi
+# Standard NetworkPolicy is visible to AnyEval's provenance hook (which queries
+# networking.k8s.io). The Autopilot cluster has no CiliumNetworkPolicy CRD;
+# the custom AnyEval chart emits only this standard policy, including DNS denial.
+additionalResources:
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: '{{ .Release.Name }}-scicode-deny-all'
+      namespace: '{{ .Release.Namespace }}'
+    spec:
+      # Select THIS release's pod only. `podSelector: {}` selects every pod in the namespace,
+      # including shared infrastructure such as the egress proxy, and starved it of egress.
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: '{{ .Release.Name }}'
+      policyTypes: [Ingress, Egress]
+      ingress: []
+      egress: []

@@ -1,6 +1,6 @@
 # SciCode for AnyEval
 
-`eval-scicode` 1.0.0 registers **`scicode/scicode`**, an Inspect task measuring
+`eval-scicode` 1.1.0 registers **`scicode/scicode`**, an Inspect task measuring
 scientific Python code generation through sequential subproblems. The published
 population is **65 test problems / 291 steps**. `include_dev_set=True` appends
 15 dev problems / 50 steps, preserving upstream order and exact string
@@ -8,6 +8,9 @@ population is **65 test problems / 291 steps**. `include_dev_set=True` appends
 and a **CORRECT verdict only if every step passes every test**. Accuracy is the
 headline main-problem pass rate. JSON explanations include the subproblem pass
 fraction, counts and sanitized step statuses; there is no model judge.
+It also registers **`scicode/scicode_verified`**, the same protocol on the 64
+corrected SciCode-Verified problems; see
+[SciCode-Verified](#scicode-verified-scicodescicode_verified).
 
 ## Dataset and private grading
 
@@ -329,6 +332,102 @@ problems** is needed. All 50 dev steps still execute with their original asserti
 | --- | --- | --- |
 | 78.3 | 1–3 | The timing-weighted error metric selects `dt=0.001`, returning shapes `(10001, 2)`, `(20001, 2)`, `(15001, 2)`. Targets have shapes `(2, 2)`, `(3, 2)`, `(2, 2)` and match trajectories at `dt=10`. `np.allclose` raises a broadcasting `ValueError`. |
 | 70.8 | 4 (1–3 pass) | `AssertionError`; maximum probability error about `1.7914e-4`. At `L=1.611792e22`, computed phases are of order `1e10`. A relative Hamiltonian perturbation of `1e-15` changes a probability by about `1.2502e-4`, demonstrating sensitivity to floating-point rounding. |
+
+## SciCode-Verified (`scicode/scicode_verified`)
+
+Package 1.1.0 adds **`scicode/scicode_verified`**: the **64 main problems / 290 steps** of
+SciCode-Verified v2 (Hu, Huang, Deng and Chen, [arXiv:2608.04975](https://arxiv.org/abs/2608.04975)),
+an expert audit of the 65 SciCode test problems that corrected 262 defects in prompts,
+headers, tests and frozen targets. Problem **2** is excluded upstream because its
+specification fixes no verifiable answer. Sample ids are the upstream string ids, in the
+release's order. `scicode/scicode` is unchanged: same records, prompts, requests, image
+and version.
+
+**Data.** `scicode/data/problems_verified_test.jsonl.gz` is the byte-preserved
+`scicode_verified/problems_test.jsonl` of
+[flyingwagner/scicode-verified](https://github.com/flyingwagner/scicode-verified) at
+`ddab4a92f8d80a7113ab946628e994b52354d838` (SHA-256
+`427771cb…d1440ba`, the release manifest's MD5 `5c604d8dbf52642bd94e13b92c8f52eb`),
+identical to `data/problems_test.jsonl` of Hugging Face `shhu2001/SciCode-Verified` at
+`eea11a866be6860725258702b39ef8651ed26abd`. `scicode/data/verified_manifest.json` records
+source and compressed hashes, ids and counts; loading validates them like the original
+data. Rebuild with `python scripts/build_verified_dataset.py /path/to/scicode-verified-clone`.
+The release ships **no reference code** for any test step (`ground_truth_code` and
+`general_solution` are null), and samples carry only `problem_description_main`.
+
+**Targets and image.** The corrected targets are the release's `test_data_cleaned.h5`
+(1,108,078,257 bytes, MD5 `2b41a7df40ddc23ce651ec05b8ecb6f8`, SHA-256
+`8fb6e575b7b6dda5e48b04dea338fc6af4fe185774b8f19221c96945df9b4142`), fetched by
+`scripts/fetch_verified_test_data.py` from the pinned Hugging Face revision and baked by
+`scicode/verified.Dockerfile` into
+`us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.0.0`
+(digest `@sha256:cfa324f40fb0fdbcb8563db97d64498a18ffd434a9c98d7b83131104b0669678`) at the same root-only path the runtime reads. That
+Dockerfile is the original one line for line except for the target file; the image adds a
+root-owned marker `/opt/scicode/test_data.sha256`. Verified requests carry
+`targets_sha256` and SETUP refuses a request whose digest does not match the marker, or a
+marker without a digest, so neither task can grade against the other's targets. The
+original image has no marker and `scicode/scicode` sends no digest. A separate image (not
+one image carrying both files) keeps the original image and its digest untouched.
+`values-verified.yaml` and `compose-verified.yaml` differ from the originals only in the
+image. Build with `python scripts/fetch_verified_test_data.py` and
+`gcloud builds submit --config scripts/cloudbuild-image-verified.yaml .`.
+
+**Protocol.** Identical to `scicode/scicode`: the supplied `inspect_evals/scicode`
+sequential chat, scientific background off by default, every step generated and tested
+(the three official skip steps 13.6, 62.1 and 76.3 have no tests and are generated and
+carried forward as in `scicode/scicode`), 300 seconds per step, the same trusted executor,
+serialization and receipts, and the token-limit partial scoring. SciCode-Verified changed
+test sources and targets, not the test mechanics: its harness still loads targets with
+`process_hdf5_to_tuple` and executes each `test_cases` source (tolerances live inside the
+sources), so no runner change is mirrored. Step 72.6 has no direct tests in the release
+(its seeded exact-lattice tests were deleted; 72.7 checks it), so it passes when the
+composed program runs.
+
+Deliberate differences from the release's own runner (`eval_clean/run_deepseek_eval.py`),
+so published SciCode-Verified numbers are calibration context, not same-harness targets:
+
+* It prompts each step as a fresh single message containing all earlier step code, and
+  injects the upstream reference code for 13.6/62.1/76.3 (never generated or scored,
+  287 scored steps). This package keeps the Inspect conversation and scores 290 steps.
+* Its canonical table is with background; this task defaults to background off
+  (`provide_scientific_background=True` switches it).
+* It allows 1,800 seconds per step; this task keeps 300 (the `timeout` argument).
+* It grades each step in a 2024 stack (NumPy 1.26.4 / SciPy 1.13.1) and a 2025 stack
+  (NumPy 2.4.2 / SciPy 1.17.1) and passes a step if either passes. This image is one
+  environment with the same NumPy/SciPy pins as that 2024 stack, plus matplotlib. The
+  paper's Appendix B attributes the OR rescues to matplotlib missing from its 2024 stack
+  (problem 80; installed here), to SciPy 1.13's `sqrtm` returning complex256 arrays that
+  NumPy 1.26 `linalg` rejects (steps 65.5/65.6; such solutions fail here) and one
+  undiagnosed step (60.5).
+
+**Known harness limit (both tasks).** A candidate result crosses the proxy boundary within
+the per-test 32 MiB reply budget. For the cases below, a correct result is larger than
+that budget, so a correct solution is signed incorrect: **13.14 case 3, 53.4 case 3,
+63.2 case 2, 63.4 case 2 and 63.5 cases 1–3**. The tests and targets are the same in
+`scicode/scicode`, so problems 13, 53 and 63 cannot currently be passed in either task.
+`tests/test_verified.py` pins the list.
+
+**Checks.** SciCode-Verified ships no test-set reference solutions, so no test step can be
+run with a reference solution. `scripts/cloudbuild-canonical-verified.yaml` runs
+`canonical_check.py --variant verified` in the verified image: the 50 dev reference steps
+(bound to the image's marker), then target loading for all 286 tested verified steps under
+the executor's 768 MiB address-space limit. The release also patched dev step 1.1
+(`targets/1.json`, outside its population): the unchanged dev reference reproduces the
+original values for cases 2–3, not the patched ones, so the verified-variant check reports
+1.1 as `known_verified_dev_target_change` (cases 2 and 3 exactly). Result: CANON_TBD.
+Locally, `tests/test_verified.py` replays the exact targets as candidate results through the
+real two-process executor for the eleven corrected steps whose tests use new constructs
+(builtins, test-local helpers and lambdas, dict and object results, sparse operator dicts:
+12.2, 12.4, 31.3, 33.2, 33.3, 53.4, 62.5, 73.6–73.9); all pass except the reply-budget
+cases above. A corpus audit confirms no target-derived value is passed to a
+candidate-defined callee in any of the 885 verified test sources.
+
+**Published results.** The paper's Table 1 (with background, pass@1, two-environment OR,
+64 problems) reports main-problem accuracy of 9.4–26.6% on the original data and
+68.8–92.2% on SciCode-Verified for twelve model snapshots. Per-model per-problem results
+are not published: `eval_clean/ds_runs/` is not in the repository, the Hugging Face
+dataset or the release; `analysis/flips.json` lists only per-step fail→pass and pass→fail
+changes for four models.
 
 ## Historical published baselines and licensing
 

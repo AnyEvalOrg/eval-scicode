@@ -121,7 +121,7 @@ def setup_probe(tmp_path):
     )
     exec(compile(ast.Module(body=source_nodes(SETUP, ast.FunctionDef), type_ignores=[]),
                  '<setup-functions>', 'exec'), namespace)
-    namespace['check_test_data'] = lambda: None  # separately tested image prerequisite
+    namespace['check_test_data'] = lambda *a: None  # separately tested image prerequisite
     return namespace, fault, seen, child
 
 

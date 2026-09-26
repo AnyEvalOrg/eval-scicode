@@ -5,7 +5,7 @@ import re
 from typing import NamedTuple
 from inspect_ai.scorer import CORRECT, INCORRECT, Score, accuracy, scorer
 from inspect_ai.util import sandbox
-from .dataset import load_records
+from .dataset import VARIANTS, VERIFIED_TEST_DATA_SHA256, load_records, load_verified_records
 from .execution import execution_request
 from .solver import composed_code, generated_steps
 from .publication import private_grading
@@ -129,8 +129,14 @@ def stopped_by_token_limit(state):
 
 
 @scorer(metrics=[accuracy()])
-def verify(timeout=300):
-    records = {r['problem_id']: r for r in load_records(True)}
+def verify(timeout=300, variant='scicode'):
+    if variant not in VARIANTS:
+        raise ValueError('unknown SciCode variant')
+    # Problem ids overlap between SciCode and SciCode-Verified; never mix records.
+    records = {r['problem_id']: r for r in (load_records(True) if variant == 'scicode'
+                                           else load_verified_records())}
+    # The original image predates target markers; SciCode-Verified binds its targets.
+    targets_sha256 = VERIFIED_TEST_DATA_SHA256 if variant == 'verified' else None
 
     async def private_score(state, target):
         record = records[str(state.sample_id)]
@@ -152,7 +158,7 @@ def verify(timeout=300):
                 results.append({'step':step['step_number'], 'passed':False, 'reason':'not run after sandbox termination'})
                 continue
             code = composed_code(record, state.messages, step)
-            payload = execution_request(code, step, timeout, record['required_dependencies'])
+            payload = execution_request(code, step, timeout, record['required_dependencies'], targets_sha256)
             result = await run_payload(sandbox(), payload)
             results.append({'step':step['step_number'], 'passed':result.passed, 'reason':result.reason})
             halted = result.terminal

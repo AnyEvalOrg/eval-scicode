@@ -1,7 +1,7 @@
 """The supplied Inspect sequential chat protocol, retaining only public prompts."""
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser
 from inspect_ai.solver import solver
-from .dataset import load_records
+from .dataset import VARIANTS, load_records, load_verified_records
 from .prompt_templates import INITIAL_PROMPT, INITIAL_PROMPT_PROVIDE_BACKGROUND, SUBPROBLEM_PROMPT, SUBPROBLEM_PROMPT_PROVIDE_BACKGROUND
 
 
@@ -27,7 +27,11 @@ def composed_code(record, messages, step):
 
 
 @solver
-def solve_scicode_problem(provide_scientific_background=False):
+def solve_scicode_problem(provide_scientific_background=False, variant='scicode'):
+    if variant not in VARIANTS:
+        raise ValueError('unknown SciCode variant')
+    # Problem ids overlap between SciCode and SciCode-Verified; never mix records.
+    records = load_records(True) if variant == 'scicode' else load_verified_records()
     initial = INITIAL_PROMPT_PROVIDE_BACKGROUND if provide_scientific_background else INITIAL_PROMPT
     template = SUBPROBLEM_PROMPT_PROVIDE_BACKGROUND if provide_scientific_background else SUBPROBLEM_PROMPT
     # This factory frame ends before generation. Neither the closure nor any
@@ -36,7 +40,7 @@ def solve_scicode_problem(provide_scientific_background=False):
         r['problem_id']: (
             initial.format(required_dependencies=r['required_dependencies']),
             tuple(template.format(**step) for step in r['sub_steps']),
-        ) for r in load_records(True)
+        ) for r in records
     }
 
     async def solve(state, generate):

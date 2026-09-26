@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eval-scicode"
-version = "1.0.0"
-description = "SciCode sequential scientific code generation for AnyEval and Inspect"
+version = "1.1.0"
+description = "SciCode and SciCode-Verified sequential scientific code generation for AnyEval and Inspect"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
@@ -27,7 +27,7 @@ include-package-data = true
 license-files = ["LICENSE", "NOTICE.md"]
 
 [tool.setuptools.package-data]
-scicode = ["data/*.gz", "data/*.json", "*.yaml", "*.txt", "Dockerfile", "chart/*.yaml", "chart/templates/*.yaml"]
+scicode = ["data/*.gz", "data/*.json", "*.yaml", "*.txt", "Dockerfile", "*.Dockerfile", "chart/*.yaml", "chart/templates/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

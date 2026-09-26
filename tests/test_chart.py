@@ -37,8 +37,8 @@ def test_task_and_catalog():
     assert len(scicode(include_dev_set=True,sandbox_type='docker').dataset)==80
     assert scicode(sandbox_type='docker').config.temperature is None
     catalog=json.loads(Path('anyeval.json').read_text())
-    assert catalog['tasks']==[{'name':'scicode','samples':65}]
-    assert catalog['total_samples']==65
+    assert catalog['tasks'][0]=={'name':'scicode','samples':65}
+    assert catalog['total_samples']==65+64  # scicode_verified: tests/test_verified.py
 
 
 def test_docker_target_security_and_build_paths():
