@@ -367,3 +367,31 @@ def test_corrected_test_constructs_pass_exact_replays(tmp_path, step_id):
                         dependencies=record['required_dependencies'], timeout=300)
     failed = [i for i, passed in enumerate(result['verdicts'], 1) if not passed]
     assert receipt_failure(result) is None, f'{step_id}: failed cases {failed}; receipt={result}'
+
+
+@pytest.mark.parametrize("loader,constant", [
+    ("load_records", "CHECKSUMS"),
+    ("load_verified_records", "VERIFIED_CHECKSUM"),
+])
+def test_integrity_checks_survive_optimized_python(loader, constant):
+    # The checks were asserts, which `python -O` strips: altered packaged data would
+    # have loaded silently (Astra, PR #2). Run a real optimized interpreter.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    tamper = ("{'all': '0'*64, 'dev': '0'*64}" if constant == "CHECKSUMS" else "'0'*64")
+    code = (
+        "import scicode.dataset as d\n"
+        f"d.{constant} = {tamper}\n"
+        "try:\n"
+        f"    d.{loader}()\n"
+        "except RuntimeError as exc:\n"
+        "    print('refused', exc)\n"
+        "else:\n"
+        "    print('LOADED')\n"
+    )
+    root = Path(__file__).resolve().parents[1]
+    out = subprocess.run([sys.executable, "-O", "-c", code], capture_output=True, text=True,
+                         cwd=root, env={**__import__("os").environ, "PYTHONPATH": str(root)})
+    assert "refused Packaged dataset invalid" in out.stdout, out.stdout + out.stderr
