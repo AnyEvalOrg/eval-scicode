@@ -365,8 +365,12 @@ The release ships **no reference code** for any test step (`ground_truth_code` a
 `8fb6e575b7b6dda5e48b04dea338fc6af4fe185774b8f19221c96945df9b4142`), fetched by
 `scripts/fetch_verified_test_data.py` from the pinned Hugging Face revision and baked by
 `scicode/verified.Dockerfile` into
-`us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.0.0`
-(digest `@sha256:cfa324f40fb0fdbcb8563db97d64498a18ffd434a9c98d7b83131104b0669678`) at the same root-only path the runtime reads. That
+`us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.1.0`
+(digest `@sha256:82b7f2e5494bad44bc7140512f08ee791ad61578283c5d46564d28015b16fd8f`, Cloud Build
+`9aee08b6-2c83-4cd4-b602-e3cc749d697f`) at the same root-only path the runtime reads. The
+original task's image is now `eval-scicode-sandbox:1.1.0` =
+`@sha256:b7404fbaab2ef93b8f08543a0171910731bff00615555c9f690c4ea0430a587d` (Cloud Build
+`b77a3652-ef72-4f5f-806b-96ddb5b41a30`); both carry the 1.1.0 executor (reply budget below). That
 Dockerfile is the original one line for line except for the target file; the image adds a
 root-owned marker `/opt/scicode/test_data.sha256`. Verified requests carry
 `targets_sha256` and SETUP refuses a request whose digest does not match the marker, or a
@@ -438,12 +442,21 @@ run with a reference solution. `scripts/cloudbuild-canonical-verified.yaml` runs
 the executor's address-space limit. The release also patched dev step 1.1
 (`targets/1.json`, outside its population): the unchanged dev reference reproduces the
 original values for cases 2–3, not the patched ones, so the verified-variant check reports
-1.1 as `known_verified_dev_target_change` (cases 2 and 3 exactly). Cloud Build `6d331447-5379-4cae-83a7-da523bda09c7` on the digest-pinned image (2026-09-26): **47 passed, 2 known upstream defects (78.3, 70.8), 1 known verified dev target change (1.1), 0 unexpected failures; targets loaded for 286/286 tested verified steps**; peak candidate RSS 2,443,464,704 bytes.
+1.1 as `known_verified_dev_target_change` (cases 2 and 3 exactly). Both canonical
+configurations also pass `--replays` (the six largest-reply steps, every case) in their own
+image. Results on the 1.1.0 digests (2026-09-26):
+
+| Image | Cloud Build | Dev steps | Replays | Verified targets | Peak executor VmPeak | Peak candidate RSS |
+|---|---|---|---|---|---|---|
+| `eval-scicode-sandbox@sha256:b7404fba…` | `14fe0045` | 48 passed, 2 known upstream defects (78.3, 70.8), 0 unexpected | 6/6 steps, all cases | n/a | 1,044,922,368 B (63.2) | 2,443,505,664 B (dev) |
+| `eval-scicode-verified-sandbox@sha256:82b7f2e5…` | `453fa829` | 47 passed, 2 known upstream defects, 1 known verified dev target change (1.1), 0 unexpected | 6/6 steps, all cases | 286/286 loaded | 1,044,922,368 B (63.2) | 2,441,031,680 B (dev) |
+
+The earlier 1.0.0 verified image (`sha256:cfa324f4…`, Cloud Build `6d331447`) gave the same
+dev result before the budget change.
 Locally, `tests/test_verified.py` replays the exact targets as candidate results through the
 real two-process executor for the eleven corrected steps whose tests use new constructs
 (builtins, test-local helpers and lambdas, dict and object results, sparse operator dicts:
-12.2, 12.4, 31.3, 33.2, 33.3, 53.4, 62.5, 73.6–73.9); all pass except the reply-budget
-cases above. A corpus audit confirms no target-derived value is passed to a
+12.2, 12.4, 31.3, 33.2, 33.3, 53.4, 62.5, 73.6–73.9); all cases pass. A corpus audit confirms no target-derived value is passed to a
 candidate-defined callee in any of the 885 verified test sources.
 
 **Published results.** The paper's Table 1 (with background, pass@1, two-environment OR,

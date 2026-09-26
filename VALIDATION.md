@@ -148,3 +148,20 @@ Image: `eval-scicode-verified-sandbox:1.0.0` =
 Canonical: Cloud Build `6d331447-5379-4cae-83a7-da523bda09c7` against that digest —
 47 passed, 2 known upstream defects, 1 known verified dev target change (1.1 cases 2–3),
 0 unexpected; 286/286 verified target sets loaded under 768 MiB.
+
+## Reply budget (package 1.1.0, 2026-09-26)
+
+Command as above. Result: **648 passed, 2 failed** in 505 s (the documented 78.3/70.8 dev defects).
+`tests/test_reply_budget.py` runs the six largest-reply steps in both populations through
+the real two-process executor (12 cases pass) and checks frame/aggregate refusal, the
+separate `reply_limit`, executor VmPeak reporting and receipt validation.
+
+Mutation check (copies of the tree, never the checkout): restoring the frame limit to
+32 MiB fails all 12 replay tests; restoring only the per-test reply budget to 32 MiB fails
+10 of 12 (13.14/3, 53.4/3, 63.2/2 and the rest of that step after the channel breaks,
+63.4/1–3, 63.5/1–3; 63.3 passes because its reply is sparse); restoring all three old
+values fails all 12. The executor cap is not enforced on macOS; in-image, the measured
+996.5 MiB VmPeak exceeds the old 768 MiB cap.
+
+In-image: see README.md (Cloud Builds `a086bc72` measurement at a provisional 2 GiB cap,
+`14fe0045` and `453fa829` on the published 1.1.0 digests).
