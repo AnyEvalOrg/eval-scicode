@@ -122,7 +122,7 @@ Result: **622 passed, 2 failed** in 219 s. The two failures are the documented
 whose same command gives 512 passed, 2 failed). Without the HDF5 assets (CI) the
 target-dependent tests skip.
 
-* `tests/test_verified.py` (98 tests): manifest/hash pins, ids and population, sample
+* `tests/test_verified.py` (96 tests): manifest/hash pins, ids and population, sample
   hygiene, tamper refusal, corrected prompts through the unchanged templates, scorer
   requests carrying `targets_sha256` only for the verified variant, unchanged request shape
   for `scicode/scicode`, test transmission, corpus reference audit (885 sources, 939
