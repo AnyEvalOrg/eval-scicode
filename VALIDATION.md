@@ -107,3 +107,44 @@ source separately, and requires all 50 dev steps to pass. It remains the
 operator's image-backed verification step.
 
 No commit was created.
+
+## SciCode-Verified (package 1.1.0, 2026-09-26)
+
+Command (unchanged, no editable install; `scicode/test_data.h5` and
+`scicode/test_data_cleaned.h5` are read-only symlinks to the pinned assets):
+
+```sh
+PYTHONPATH=.:.build/test-deps $S/catalogue-venv/bin/python -m pytest -q -p no:cacheprovider tests/
+```
+
+Result: **622 passed, 2 failed** in 219 s. The two failures are the documented
+`test_local_dev_ground_truth` dev defects 78.3 and 70.8 (present on `anyeval-package` too,
+whose same command gives 512 passed, 2 failed). Without the HDF5 assets (CI) the
+target-dependent tests skip.
+
+* `tests/test_verified.py` (98 tests): manifest/hash pins, ids and population, sample
+  hygiene, tamper refusal, corrected prompts through the unchanged templates, scorer
+  requests carrying `targets_sha256` only for the verified variant, unchanged request shape
+  for `scicode/scicode`, test transmission, corpus reference audit (885 sources, 939
+  target-derived calls, 0 into candidate callees), task/sandbox selection, real Helm render
+  of `values-verified.yaml`, Dockerfile/values/compose parity, exact-target replays of 11
+  corrected steps through the real two-process executor, and the reply-budget cases.
+* `tests/test_supervisor.py`: SETUP marker binding for all four task/image combinations
+  plus malformed markers.
+* `tests/test_canonical_check.py`: the verified variant binds requests, classifies 1.1
+  exactly, checks every tested verified step's targets and exits non-zero on a load failure.
+
+A wheel built from this tree and installed into a clean Python 3.12 venv with
+inspect_ai 0.3.260 and inspect-k8s-sandbox 0.13.0 resolves `scicode/scicode` (65 samples,
+`compose.yaml`) and `scicode/scicode_verified` (64 samples, `compose-verified.yaml`,
+`values-verified.yaml`) through the registry and contains no HDF5 file.
+`scripts/verify_wheel.py <site-packages>` raises `scicode/scicode was not found in the
+registry` for both this wheel and the unmodified 1.0.0 wheel on this Mac (a pre-existing
+`--target` discovery issue, not introduced here).
+
+Image: `eval-scicode-verified-sandbox:1.0.0` =
+`sha256:cfa324f40fb0fdbcb8563db97d64498a18ffd434a9c98d7b83131104b0669678` (Cloud Build
+`e4053f8f-091c-43d3-9e7d-6f1b021dece0`; build log shows `/opt/scicode/test_data.h5: OK`).
+Canonical: Cloud Build `6d331447-5379-4cae-83a7-da523bda09c7` against that digest —
+47 passed, 2 known upstream defects, 1 known verified dev target change (1.1 cases 2–3),
+0 unexpected; 286/286 verified target sets loaded under 768 MiB.

@@ -414,7 +414,7 @@ run with a reference solution. `scripts/cloudbuild-canonical-verified.yaml` runs
 the executor's 768 MiB address-space limit. The release also patched dev step 1.1
 (`targets/1.json`, outside its population): the unchanged dev reference reproduces the
 original values for cases 2–3, not the patched ones, so the verified-variant check reports
-1.1 as `known_verified_dev_target_change` (cases 2 and 3 exactly). Result: CANON_TBD.
+1.1 as `known_verified_dev_target_change` (cases 2 and 3 exactly). Cloud Build `6d331447-5379-4cae-83a7-da523bda09c7` on the digest-pinned image (2026-09-26): **47 passed, 2 known upstream defects (78.3, 70.8), 1 known verified dev target change (1.1), 0 unexpected failures; targets loaded for 286/286 tested verified steps**; peak candidate RSS 2,443,464,704 bytes.
 Locally, `tests/test_verified.py` replays the exact targets as candidate results through the
 real two-process executor for the eleven corrected steps whose tests use new constructs
 (builtins, test-local helpers and lambdas, dict and object results, sparse operator dicts:
