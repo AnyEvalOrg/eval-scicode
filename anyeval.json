@@ -44,11 +44,11 @@
   "external_assets": [
     {
       "type": "container",
-      "source": "us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0"
+      "source": "us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.1.0"
     },
     {
       "type": "container",
-      "source": "us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.0.0",
+      "source": "us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.1.0",
       "condition": "scicode_verified only"
     },
     {

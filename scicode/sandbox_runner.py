@@ -149,7 +149,7 @@ def check_test_data(expected=None):
     # Images built after SciCode-Verified carry a root-owned marker naming the
     # SHA-256 their build verified. A marker and a requested digest must agree;
     # either one without the other means a task/image mismatch. The original
-    # eval-scicode-sandbox:1.0.0 image has no marker and scicode/scicode sends none.
+    # eval-scicode-sandbox image has no marker and scicode/scicode sends none.
     try:
         marker_info = os.stat("/opt/scicode/test_data.sha256", follow_symlinks=False)
     except FileNotFoundError:

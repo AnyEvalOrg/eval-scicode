@@ -22,8 +22,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0'
-VERIFIED_IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.0.0'
+IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.1.0'
+VERIFIED_IMAGE = 'us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-verified-sandbox:1.1.0'
 VERIFIED_TARGETS_SHA256 = '8fb6e575b7b6dda5e48b04dea338fc6af4fe185774b8f19221c96945df9b4142'
 # Loads one step's targets exactly as the trusted executor does, under its RLIMIT_AS
 # (comparison_worker.ADDRESS_SPACE), and prints only the count of loaded cases (never values).

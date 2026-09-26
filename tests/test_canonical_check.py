@@ -48,7 +48,7 @@ def test_cloudbuild_runs_reference_check_with_supervisor_capabilities():
     command=config['steps'][0]['args'][-1]
     for text in ['--cap-add SYS_PTRACE','--cap-add SETUID','--network none','--read-only','--memory 6g','--peak-rss','--replays','scripts/canonical_check.py']:
         assert text in command
-    assert config['substitutions']['_SANDBOX_IMAGE'].endswith('eval-scicode-sandbox:1.0.0')
+    assert config['substitutions']['_SANDBOX_IMAGE'].endswith('eval-scicode-sandbox:1.1.0')
 
 
 @pytest.mark.parametrize('step_id,verdicts,status', [

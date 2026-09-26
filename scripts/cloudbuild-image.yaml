@@ -3,5 +3,5 @@ steps:
     args: [build, -f, scicode/Dockerfile, -t, '${_SANDBOX_IMAGE}', .]
 images: ['${_SANDBOX_IMAGE}']
 substitutions:
-  _SANDBOX_IMAGE: us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0
+  _SANDBOX_IMAGE: us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.1.0
 timeout: 3600s

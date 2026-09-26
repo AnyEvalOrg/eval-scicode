@@ -219,7 +219,7 @@ gcloud builds submit --config scripts/cloudbuild-image.yaml .
 If gcloud excludes ignored files, use the included `.gcloudignore` (which
 explicitly includes `scicode/test_data.h5`). The build independently verifies
 the hash and permissions. It publishes
-`us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.0.0`.
+`us-central1-docker.pkg.dev/openevalz-sbx-84737/openevalz/eval-scicode-sandbox:1.1.0` (1.0.0 is the pre-1.1.0 executor).
 The chart references that exact tag; operators should resolve a digest for
 published-run provenance. Local build: `docker build -f scicode/Dockerfile -t
 eval-scicode-sandbox:local .`. Compose uses the prebuilt production image; set
