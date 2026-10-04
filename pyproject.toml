@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eval-scicode"
-version = "1.1.0"
+version = "1.2.0"
 description = "SciCode and SciCode-Verified sequential scientific code generation for AnyEval and Inspect"
 readme = "README.md"
 requires-python = ">=3.11"
