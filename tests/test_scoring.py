@@ -204,3 +204,26 @@ def test_recursive_candidate_inventory_reaches_sandbox_and_scores_incorrect(tmp_
 def test_optional_peak_rss_receipt_is_a_nonnegative_integer(peak):
     receipt = verify_receipt(signed(peak_candidate_rss_bytes=peak), KEY)
     assert (receipt is not None) is (type(peak) is int and peak >= 0)
+
+
+@pytest.mark.parametrize('passes,replies,stopped', [
+    ([True, True, True], 3, False),     # whole problem correct
+    ([True, False, True], 3, False),    # partial: two of three steps
+    ([True, True], 2, True),            # stopped by the token limit before step 3
+])
+def test_step_counts_survive_in_metadata(monkeypatch, passes, replies, stopped):
+    # Publication withholds every explanation by key name, so the per-step rate is
+    # only recoverable from metadata. It must equal the explanation's counts exactly
+    # and carry nothing else (no step reasons, no answer bytes).
+    _three_steps(monkeypatch)
+    results=iter(scoring.StepResult(p, 'all tests passed' if p else 'test failed') for p in passes)
+    monkeypatch.setattr(scoring,'run_payload',AsyncMock(side_effect=lambda *a: next(results)))
+    state=SimpleNamespace(sample_id='fixture',messages=[ChatMessageAssistant(content='pass')]*replies,
+                          token_limit=256000 if stopped else None, token_usage=256267 if stopped else None)
+    score=asyncio.run(scoring.verify()(state,Target('')))
+    explanation=json.loads(score.explanation)
+    assert score.metadata=={'subproblems_passed':explanation['subproblems_passed'],
+                            'subproblems_total':explanation['subproblems_total']}
+    assert score.metadata['subproblems_total']==3
+    assert score.metadata['subproblems_passed']==sum(passes)
+    assert (score.value==CORRECT)==(sum(passes)==3)

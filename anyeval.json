@@ -18,7 +18,7 @@
     "path": "eval/data",
     "commit": "69a8cfc829fe8788a426ce8b5de6292366dce7ef",
     "inspect_ai": "0.3.260",
-    "eval_version": "1.1.0",
+    "eval_version": "1.2.0",
     "dependency": ""
   },
   "execution": {

@@ -163,9 +163,13 @@ def verify(timeout=300, variant='scicode'):
             results.append({'step':step['step_number'], 'passed':result.passed, 'reason':result.reason})
             halted = result.terminal
         count = sum(r['passed'] for r in results)
+        # The counts also go in metadata: publication withholds every explanation by
+        # key name, and the per-step pass rate (the metric most SciCode leaderboards
+        # report) must survive it. Two integers, no answer bytes.
         return Score(value=CORRECT if count == len(results) else INCORRECT,
                      explanation=json.dumps({'subproblems_passed':count,'subproblems_total':len(results),
-                                             'subproblem_pass_fraction':count/len(results), 'steps':results}))
+                                             'subproblem_pass_fraction':count/len(results), 'steps':results}),
+                     metadata={'subproblems_passed': count, 'subproblems_total': len(results)})
 
     async def score(state, target):
         # Raise without private traceback frames or exception context.
